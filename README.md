@@ -19,9 +19,9 @@ A Python SDK for the Tendrl data collection platform with cross-platform UNIX so
 - Package into any commercial or hosted product (e.g., SaaS, PaaS)
 - Copy design patterns or protocol logic for another system without permission
 
-For licensing questions, contact: support@tendrl.com
+For licensing questions, contact: `support@tendrl.com`
 
-See the [LICENSE](LICENSE) file for complete terms and restrictions.
+See the [LICENSE](`https://github.com/tendrl-inc-labs/python-sdk/blob/main/LICENSE`) file for complete terms and restrictions.
 
 ## Features
 
@@ -38,14 +38,14 @@ See the [LICENSE](LICENSE) file for complete terms and restrictions.
 ### Windows
 
 - **Requirements**: Windows 10 version 1803+ or Windows Server 2019+ (Agent Mode)
-- **Recommended**: Use [Tendrl Nano Agent](../nano_agent/) for optimal performance
+- **Recommended**: Use [Tendrl Nano Agent](`https://tendrl.com/docs/nano_agent/`) for optimal performance
 - **Agent Installation**: Download and run `tendrl-agent.exe` with your API key
 - **Connection**: Python SDK connects automatically to the local agent
 
 ### Unix/Linux/macOS
 
 - **Native Support**: Works on all modern versions
-- **Recommended**: Use [Tendrl Nano Agent](../nano_agent/) for optimal performance
+- **Recommended**: Use [Tendrl Nano Agent](`https://tendrl.com/docs/nano_agent/`) for optimal performance
 - **Direct API**: Can also connect directly to Tendrl API without local agent
 
 ## Operating Modes
@@ -73,9 +73,9 @@ client = Client(mode="api", api_key="your_key")  # Direct to server
 **Performance Characteristics:**
 
 - **Light Load** (< 10 msg/sec): ~2-5ms per message
-- **Heavy Load** (100+ msg/sec): ~1-3ms per message (batched HTTP requests)
-- **Per-message latency**: ~2-10ms (HTTP/2 + network + Python overhead)
-- **Batching**: Dynamic batching based on system resources
+- **Heavy Load** (100+ msg/sec): ~0.5-1ms per message (true HTTP batch requests)
+- **Per-message latency**: ~2-10ms individual, ~0.5-1ms batched
+- **Batching**: True HTTP batching - multiple messages per HTTP request
 - **Resource usage**: Higher CPU/memory due to Python interpreted overhead
 
 ### 🚀 Nano Agent Mode (Recommended for Performance)
@@ -111,8 +111,8 @@ client = Client(mode="agent")  # Connects to local Go agent
 | Feature | Agent Mode | Direct API Mode |
 |---------|------------|-----------------|
 | **Performance (Light Load)** | ~0.5ms/msg | ~2-5ms/msg |
-| **Performance (Heavy Load)** | ~0.1ms/msg (batched) | ~1-3ms/msg (batched) |
-| **Message Batching** | ✅ Intelligent (10-500 msgs) | ✅ Dynamic batching (10-500 msgs) |
+| **Performance (Heavy Load)** | ~0.1ms/msg (batched) | ~0.5-1ms/msg (batched) |
+| **Message Batching** | ✅ Intelligent (10-500 msgs) | ✅ True HTTP batching (10-500 msgs) |
 | **Offline Storage** | ✅ SQLite persistence | ✅ SQLite persistence |
 | **Connection Pooling** | ✅ Optimized Go HTTP/2 pools | ✅ httpx connection pooling |
 | **Automatic Retries** | ✅ Built-in agent logic | ✅ SDK retry mechanisms |
@@ -143,7 +143,9 @@ client = Client(mode="agent")  # Connects to local Go agent
 ### 💡 Choosing the Right Mode
 
 **Use Direct API Mode when:**
-- **Simplicity is priority**: Quick setup, no additional components
+
+- **Simplicity is priority**: Quick setup, no additional
+components
 - **Development/Testing**: Prototyping, debugging, local development
 - **Low to moderate volume**: < 50 messages per second
 - **Deployment constraints**: Can't install additional services
@@ -441,7 +443,7 @@ Server processes webhook
 
 ### Using with Tendrl Nano Agent
 
-For optimal performance (see [Operating Modes](#operating-modes) comparison), use the [Tendrl Nano Agent](../nano_agent/):
+For optimal performance (see [Operating Modes](#operating-modes) comparison), use the [Tendrl Nano Agent](`https://tendrl.com/docs/nano_agent/`):
 
 #### 1. Start the Tendrl Nano Agent
 

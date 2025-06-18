@@ -87,36 +87,48 @@ def calculate_dynamic_batch_size(
 
 
 def make_message(
-    msg_type: str,
-    msg: Union[dict, str],
-    tags=[],
-    entity: str = "",
-    wait_response: bool = False,
-) -> dict:
-    if msg_type not in MSG_TYPES:
-        return ValueError(f"'msg_type' not in {MSG_TYPES}")
-    context = {}
-    if entity:
-        msg_type = f"dest_{msg_type}"
+    data,
+    msg_type,
+    tags=None,
+    entity="",
+    timestamp=None,
+    wait_response=False,
+):
+    """Create a message in the format expected by the Tendrl API.
+    
+    Args:
+        data: Message data (str or dict)
+        msg_type: Type of message
+        tags: Optional list of string tags
+        entity: Optional destination entity
+        timestamp: Optional timestamp (will use current UTC if not provided)
+        wait_response: Whether to wait for response
+        
+    Returns:
+        dict: Formatted message
+    """
+    if not isinstance(data, (str, dict)):
+        raise TypeError("Allowed types: ['str', 'dict']")
+    if not tags:
+        tags = []
     else:
-        context["tags"] = tags if tags else []
-    if wait_response:
+        if not all(isinstance(i, str) for i in tags):
+            raise TypeError("tags must be of type 'str'")
+    
+    context = {"tags": tags} if tags else {}
+    if wait_response and not entity:
         context["wait"] = True
-
-    if isinstance(msg, str):
-        msg = {'payload': msg}
-
-    message = {
+    
+    m = {
         "msg_type": msg_type,
-        "data": msg,
+        "data": data,
         "context": context,
         "dest": entity,
         "timestamp": datetime.datetime.now(ZoneInfo("UTC")).isoformat(
             timespec="milliseconds"
-        ),
+        ) if not timestamp else timestamp,
     }
-
-    return {k: v for k, v in message.items() if v}
+    return {k: v for k, v in m.items() if v}
 
 def connect(api_key: str, mode: str) -> bool:
     if not internet():

@@ -132,7 +132,7 @@ class Client:
                 raise APIException("No api_key provided and TENDRL_KEY env var not set")
             self.client = httpx.Client(
                 http2=True,
-                base_url=self.config.get("app_url"),
+                base_url=self.config.get("app_url") + "/api",
                 headers={"Authorization": f"Bearer {api_key}"},
             )
 
@@ -231,8 +231,8 @@ class Client:
             raise ValueError(f"Invalid type: {type(msg)}")
 
         message = make_message(
-            "publish",
             msg,
+            "publish",
             tags=tags,
             entity=entity,
             wait_response=wait_response,
@@ -264,7 +264,7 @@ class Client:
                 data = func(*args, **kwargs)
                 if self.client_enabled:
                     try:
-                        self.queue.put(make_message("publish", data, tags=tags))
+                        self.queue.put(make_message(data, "publish", tags=tags))
                     except QueueFull:
                         if write_offline and self.storage:
                             if self.debug:
@@ -346,7 +346,44 @@ class Client:
         Args:
             messages: List of messages to publish
         """
+        if not messages:
+            return
+            
+        # Check if any messages require individual handling (wait_response=True)
+        individual_messages = []
+        batch_messages = []
+        
         for message in messages:
+            if message.get("context", {}).get("wait"):
+                individual_messages.append(message)
+            else:
+                batch_messages.append(message)
+        
+        # Send batch messages using the batch endpoint
+        if batch_messages:
+            try:
+                if self.mode == "agent":
+                    # For agent mode, send individual messages (no batch support in socket protocol)
+                    for message in batch_messages:
+                        self._publish_message(message)
+                else:
+                    # Use batch endpoint for HTTP API
+                    response = self.client.post(
+                        url="/entities/messages",  # Batch endpoint
+                        json={"messages": batch_messages},
+                        timeout=30,  # Longer timeout for batch requests
+                    )
+                    if self.debug and response.status_code != 200:
+                        print(f"Batch request failed with status {response.status_code}")
+            except Exception as e:
+                if self.debug:
+                    print(f"Batch request failed: {e}, falling back to individual requests")
+                # Fallback to individual requests
+                for message in batch_messages:
+                    self._publish_message(message)
+        
+        # Send individual messages that require wait_response
+        for message in individual_messages:
             self._publish_message(message)
 
     def _run_sender(self) -> None:
@@ -505,7 +542,7 @@ class Client:
                     tags = json.loads(stored_msg['tags']) if stored_msg['tags'] else None
 
                     # Create message in the expected format
-                    message = make_message("publish", data, tags=tags)
+                    message = make_message(data, "publish", tags=tags)
                     messages_to_send.append(message)
                     message_ids_to_delete.append(stored_msg['id'])
                 except Exception as e:
