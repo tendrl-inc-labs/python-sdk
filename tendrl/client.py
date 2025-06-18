@@ -8,7 +8,6 @@ import socket
 import threading
 import time
 from typing import Callable, List, Union
-import psutil
 
 import httpx
 

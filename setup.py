@@ -27,7 +27,8 @@ setup(
         "Topic :: Software Development :: Libraries :: Python Modules",
         "Topic :: System :: Monitoring",
         "Topic :: System :: Logging",
-        "Topic :: System :: IoT"
+        "Topic :: System :: Networking :: Monitoring",
+        "Topic :: Internet",
         "License :: Other/Proprietary License",
         "Programming Language :: Python :: 3",
         "Programming Language :: Python :: 3.8",
