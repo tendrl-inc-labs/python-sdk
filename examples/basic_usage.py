@@ -12,7 +12,7 @@ This example demonstrates the fundamental features of the Tendrl Python SDK:
 import sys
 import time
 import signal
-from datetime import datetime
+from datetime import datetime, UTC
 from tendrl import Client
 
 def signal_handler(signum, frame):
@@ -63,7 +63,7 @@ app_metrics = {
         "error_rate": 0.02,
         "active_connections": 1247
     },
-    "timestamp": datetime.utcnow().isoformat(),
+    "timestamp": datetime.now(UTC).isoformat(),
     "host": "web-01.example.com"
 }
 
@@ -102,7 +102,7 @@ def collect_system_info():
             "usage_percent": psutil.disk_usage('/').percent,
             "free_gb": round(psutil.disk_usage('/').free / (1024**3), 2)
         },
-        "collection_time": datetime.utcnow().isoformat()
+        "collection_time": datetime.now(UTC).isoformat()
     }
 
 # Collect and send system metrics
@@ -126,7 +126,7 @@ for i in range(5):
         },
         "battery_level": 85 - (i * 5),
         "signal_strength": -42 - (i * 3),
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         "device_type": "environmental_sensor",
         "firmware_version": "2.1.4"
     }

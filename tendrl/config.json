@@ -1,6 +1,0 @@
-{
-    "tendrl_version": "0.1.1",
-    "app_url": "https://app.tendrl.com",
-    "api_key": "",
-    "socket_path": "/var/lib/tendrl/tendrl_agent.sock"
-}

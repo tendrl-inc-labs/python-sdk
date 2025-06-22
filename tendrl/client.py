@@ -2,7 +2,6 @@
 import json
 import os
 import platform
-from pathlib import Path
 from queue import Queue, Empty, Full as QueueFull
 import socket
 import threading
@@ -15,6 +14,7 @@ from tendrl.utils import make_message
 from tendrl.utils.utils import get_system_metrics, calculate_dynamic_batch_size
 from .storage import SQLiteStorage
 
+VERSION = "0.1.0"
 
 class APIException(Exception):
     """Exception raised for API-related errors."""
@@ -40,7 +40,6 @@ class Client:
         "_db",
         "_db_lock",
         "db_filepath",
-        "config",
         "target_cpu_percent",
         "target_mem_percent",
         "min_batch_size",
@@ -49,11 +48,11 @@ class Client:
         "max_batch_interval",
         "storage",
         "_last_cleanup",
-        "client_enabled",
         "max_queue_size",
         "_connection_state",
         "_last_connection_check",
         "_is_windows",
+        "headless",
     )
 
     def __init__(
@@ -72,6 +71,7 @@ class Client:
         db_path: str = "tendrl_offline.db",
         callback: Callable = None,
         max_queue_size: int = 1000,
+        headless: bool = False,
     ):
         """Initialize Tendrl client with optional offline storage and dynamic batching.
 
@@ -90,6 +90,7 @@ class Client:
             db_path: Custom path for storage database (default: tendrl_offline.db)
             callback: Optional callback for message handling (default: None)
             max_queue_size: Maximum size of the message queue (default: 1000)
+            headless: Pure SDK mode - no background processing (default: False)
         """
         self.callback = None
         if callback:
@@ -97,9 +98,6 @@ class Client:
                 raise TypeError("callback must be a callable function accepting dict")
             self.callback = callback
 
-        config_path = Path(__file__).parent.resolve() / "config.json"
-        with open(config_path, "r", encoding="utf-8") as f:
-            self.config = json.load(f)
         self.mode = mode if mode == "api" else "agent"
         self.check_msg_rate = check_msg_rate
         self.debug = debug
@@ -115,7 +113,8 @@ class Client:
         self.max_batch_size = max_batch_size
         self.min_batch_interval = min_batch_interval
         self.max_batch_interval = max_batch_interval
-        self.sender_thread = threading.Thread(target=self._run_sender, daemon=True)
+        self.headless = headless
+        self.sender_thread = None if headless else threading.Thread(target=self._run_sender, daemon=True)
         self._is_windows = platform.system() == 'Windows'
 
         if self.mode == "agent":
@@ -130,10 +129,19 @@ class Client:
             api_key = api_key or os.getenv("TENDRL_KEY")
             if not api_key:
                 raise APIException("No api_key provided and TENDRL_KEY env var not set")
+            
+            # Create custom User-Agent with version and platform info
+            python_version = f"{platform.python_version()}"
+            system_info = f"{platform.system()}/{platform.release()}"
+            user_agent = f"tendrl-python-sdk/{VERSION} (Python/{python_version}; {system_info})"
+            
             self.client = httpx.Client(
                 http2=True,
-                base_url=self.config.get("app_url") + "/api",
-                headers={"Authorization": f"Bearer {api_key}"},
+                base_url="https://app.tendrl.com/api",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "User-Agent": user_agent,
+                },
             )
 
         self._last_cleanup = time.time() * 1000
@@ -145,7 +153,6 @@ class Client:
                 )
             self.storage = SQLiteStorage(db_path or "tendrl_storage.db")
 
-        self.client_enabled = True
         self._connection_state = True  # Assume connected initially
         self._last_connection_check = time.time() * 1000
 
@@ -168,11 +175,11 @@ class Client:
     def _get_socket_path(self):
         """Get platform-appropriate socket path."""
         if self._is_windows:
-            # Windows: Use Windows-style path
-            return self.config.get("socket_path", "C:\\ProgramData\\tendrl\\tendrl_agent.sock")
+            # Windows: Standard ProgramData location
+            return "C:\\ProgramData\\tendrl\\tendrl_agent.sock"
         else:
-            # Unix/Linux: Use Unix-style path
-            return self.config.get("socket_path", "/var/lib/tendrl/tendrl_agent.sock")
+            # Unix/Linux: Standard /var/lib location
+            return "/var/lib/tendrl/tendrl_agent.sock"
 
     def check_msg(self, limit: int = 1) -> None:
         """Check for messages from the server.
@@ -238,7 +245,7 @@ class Client:
             wait_response=wait_response,
         )
 
-        if wait_response:
+        if wait_response or self.headless:
             return self._publish_message(message, timeout=timeout)
 
         self.queue.put(message)
@@ -262,7 +269,11 @@ class Client:
         def wrapper(func):
             def wrapped_function(*args, **kwargs):
                 data = func(*args, **kwargs)
-                if self.client_enabled:
+                if self.headless:
+                    # In headless mode, publish directly
+                    message = make_message(data, "publish", tags=tags)
+                    self._publish_message(message)
+                else:
                     try:
                         self.queue.put(make_message(data, "publish", tags=tags))
                     except QueueFull:
@@ -272,10 +283,6 @@ class Client:
                             self.storage.store(
                                 str(time.time()), data, tags=tags, ttl=db_ttl
                             )
-                elif write_offline and self.storage:
-                    if self.debug:
-                        print(f"Offline, storing message with TTL {db_ttl}s")
-                    self.storage.store(str(time.time()), data, tags=tags, ttl=db_ttl)
                 return data
 
             return wrapped_function
@@ -284,13 +291,15 @@ class Client:
 
     def start(self):
         """Start the message sender thread."""
-        self.sender_thread.start()
+        if not self.headless and self.sender_thread:
+            self.sender_thread.start()
 
     def stop(self):
         """Stop the client and cleanup resources."""
-        self._stop_event.set()
-        self.queue.put(None)  # Send stop signal to sender thread
-        self.sender_thread.join()
+        if not self.headless and self.sender_thread:
+            self._stop_event.set()
+            self.queue.put(None)  # Send stop signal to sender thread
+            self.sender_thread.join()
         if self.mode == "agent":
             self.sock.close()
         else:
