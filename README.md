@@ -1,5 +1,9 @@
 # Tendrl Python SDK
 
+[![Version](https://img.shields.io/badge/version-0.1.3-blue.svg)](https://github.com/tendrl-inc/clients/nano_agent)
+![Python Version](https://img.shields.io/badge/python-3.9%2B-blue.svg)
+[![License](https://img.shields.io/badge/license-Proprietary-red.svg)](files/LICENSE)
+
 A Python SDK for the Tendrl data collection platform with cross-platform UNIX socket support, offline storage, and dynamic batching.
 
 ## ⚠️ License Notice
