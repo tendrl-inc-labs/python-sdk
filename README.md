@@ -1,5 +1,9 @@
 # Tendrl Python SDK
 
+[![Version](https://img.shields.io/badge/version-0.1.3-blue.svg)](https://github.com/tendrl-inc/clients/nano_agent)
+![Python Version](https://img.shields.io/badge/python-3.9%2B-blue.svg)
+[![License](https://img.shields.io/badge/license-Proprietary-red.svg)](files/LICENSE)
+
 A Python SDK for the Tendrl data collection platform with cross-platform UNIX socket support, offline storage, and dynamic batching.
 
 ## ⚠️ License Notice
@@ -19,9 +23,9 @@ A Python SDK for the Tendrl data collection platform with cross-platform UNIX so
 - Package into any commercial or hosted product (e.g., SaaS, PaaS)
 - Copy design patterns or protocol logic for another system without permission
 
-For licensing questions, contact: support@tendrl.com
+For licensing questions, contact: `support@tendrl.com`
 
-See the [LICENSE](LICENSE) file for complete terms and restrictions.
+See the [LICENSE](`https://github.com/tendrl-inc-labs/python-sdk/blob/main/LICENSE`) file for complete terms and restrictions.
 
 ## Features
 
@@ -38,14 +42,14 @@ See the [LICENSE](LICENSE) file for complete terms and restrictions.
 ### Windows
 
 - **Requirements**: Windows 10 version 1803+ or Windows Server 2019+ (Agent Mode)
-- **Recommended**: Use [Tendrl Nano Agent](../nano_agent/) for optimal performance
+- **Recommended**: Use [Tendrl Nano Agent](`https://tendrl.com/docs/nano_agent/`) for optimal performance
 - **Agent Installation**: Download and run `tendrl-agent.exe` with your API key
 - **Connection**: Python SDK connects automatically to the local agent
 
 ### Unix/Linux/macOS
 
 - **Native Support**: Works on all modern versions
-- **Recommended**: Use [Tendrl Nano Agent](../nano_agent/) for optimal performance
+- **Recommended**: Use [Tendrl Nano Agent](`https://tendrl.com/docs/nano_agent/`) for optimal performance
 - **Direct API**: Can also connect directly to Tendrl API without local agent
 
 ## Operating Modes
@@ -73,9 +77,9 @@ client = Client(mode="api", api_key="your_key")  # Direct to server
 **Performance Characteristics:**
 
 - **Light Load** (< 10 msg/sec): ~2-5ms per message
-- **Heavy Load** (100+ msg/sec): ~1-3ms per message (batched HTTP requests)
-- **Per-message latency**: ~2-10ms (HTTP/2 + network + Python overhead)
-- **Batching**: Dynamic batching based on system resources
+- **Heavy Load** (100+ msg/sec): ~0.5-1ms per message (true HTTP batch requests)
+- **Per-message latency**: ~2-10ms individual, ~0.5-1ms batched
+- **Batching**: True HTTP batching - multiple messages per HTTP request
 - **Resource usage**: Higher CPU/memory due to Python interpreted overhead
 
 ### 🚀 Nano Agent Mode (Recommended for Performance)
@@ -111,8 +115,8 @@ client = Client(mode="agent")  # Connects to local Go agent
 | Feature | Agent Mode | Direct API Mode |
 |---------|------------|-----------------|
 | **Performance (Light Load)** | ~0.5ms/msg | ~2-5ms/msg |
-| **Performance (Heavy Load)** | ~0.1ms/msg (batched) | ~1-3ms/msg (batched) |
-| **Message Batching** | ✅ Intelligent (10-500 msgs) | ✅ Dynamic batching (10-500 msgs) |
+| **Performance (Heavy Load)** | ~0.1ms/msg (batched) | ~0.5-1ms/msg (batched) |
+| **Message Batching** | ✅ Intelligent (10-500 msgs) | ✅ True HTTP batching (10-500 msgs) |
 | **Offline Storage** | ✅ SQLite persistence | ✅ SQLite persistence |
 | **Connection Pooling** | ✅ Optimized Go HTTP/2 pools | ✅ httpx connection pooling |
 | **Automatic Retries** | ✅ Built-in agent logic | ✅ SDK retry mechanisms |
@@ -143,7 +147,9 @@ client = Client(mode="agent")  # Connects to local Go agent
 ### 💡 Choosing the Right Mode
 
 **Use Direct API Mode when:**
-- **Simplicity is priority**: Quick setup, no additional components
+
+- **Simplicity is priority**: Quick setup, no additional
+components
 - **Development/Testing**: Prototyping, debugging, local development
 - **Low to moderate volume**: < 50 messages per second
 - **Deployment constraints**: Can't install additional services
@@ -196,22 +202,88 @@ def system_stats():
 # Start the client
 client.start()
 
-## API Reference
+## Headless Mode (Pure SDK)
 
-### Client Initialization
+For simple synchronous publishing without background processing:
 
 ```python
-Client(
-    mode: str = "api",                 # "api" or "agent"
-    api_key: str = None,               # API key for authentication
-    check_msg_rate: float = 3,         # Check for new messages rate (Seconds)
-    debug: bool = False,               # Enable debug logging
-    target_cpu_percent: float = 70,    # Target CPU usage
-    target_mem_percent: float = 80,    # Target memory usage
-    min_batch_size: int = 10,          # Minimum batch size
-    max_batch_size: int = 500,         # Maximum batch size
-    offline_storage: bool = False,     # Enable offline storage
-    db_path: str = "tendrl_offline.db" # Sqlite3 file path
+# Headless mode - no background threads, direct publishing
+client = Client(mode="api", api_key="your_key", headless=True)
+
+# No need to call client.start() in headless mode
+# All publish() calls are synchronous and return immediately
+
+# Direct publishing
+response = client.publish({"sensor": "temp", "value": 23.5})
+
+# Decorators also work synchronously
+@client.tether(tags=["metrics"])
+def get_data():
+    return {"metric": "value"}
+
+get_data()  # Sends immediately, no queuing
+```
+
+**Use headless mode for:**
+
+- Simple scripts that send a few messages and exit
+- Serverless/Lambda functions  
+- When you need immediate responses and full control
+- When you don't want background threads
+
+## API Reference
+
+### Client Configuration Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| **Core Settings** |
+| `mode` | `str` | `"api"` | Operating mode: `"api"` (direct HTTP) or `"agent"` (Unix socket) |
+| `api_key` | `str` | `None` | API key for authentication (or use `TENDRL_KEY` env var) |
+| `headless` | `bool` | `False` | Pure SDK mode - no background processing, synchronous calls |
+| `debug` | `bool` | `False` | Enable debug logging output |
+| **Performance & Batching** |
+| `target_cpu_percent` | `float` | `65.0` | Target CPU usage for dynamic batch sizing |
+| `target_mem_percent` | `float` | `75.0` | Target memory usage for dynamic batch sizing |
+| `min_batch_size` | `int` | `10` | Minimum messages per batch |
+| `max_batch_size` | `int` | `100` | Maximum messages per batch |
+| `min_batch_interval` | `float` | `0.1` | Minimum seconds between batches |
+| `max_batch_interval` | `float` | `1.0` | Maximum seconds between batches |
+| `max_queue_size` | `int` | `1000` | Maximum size of the message queue |
+| **Offline Storage** |
+| `offline_storage` | `bool` | `False` | Enable message persistence during outages |
+| `db_path` | `str` | `"tendrl_offline.db"` | Custom path for offline storage database |
+| **Advanced** |
+| `check_msg_rate` | `float` | `3.0` | Message check frequency in seconds (server callbacks) |
+| `callback` | `Callable` | `None` | Optional callback function for server messages |
+
+### Client Initialization Examples
+
+```python
+# Basic usage
+client = Client(mode="api", api_key="your_key")
+
+# High-performance with offline storage
+client = Client(
+    mode="agent",                    # Use Nano Agent for best performance
+    offline_storage=True,            # Enable offline persistence
+    max_batch_size=500,             # Larger batches
+    target_cpu_percent=80           # Allow higher CPU usage
+)
+
+# Headless mode for simple scripts
+client = Client(
+    mode="api", 
+    api_key="your_key",
+    headless=True                   # Synchronous, no background processing
+)
+
+# Raspberry Pi optimized
+client = Client(
+    mode="api",
+    max_queue_size=100,             # Smaller memory footprint
+    max_batch_size=20,              # Smaller batches
+    target_mem_percent=60           # Conservative memory usage
 )
 ```
 
@@ -441,7 +513,7 @@ Server processes webhook
 
 ### Using with Tendrl Nano Agent
 
-For optimal performance (see [Operating Modes](#operating-modes) comparison), use the [Tendrl Nano Agent](../nano_agent/):
+For optimal performance (see [Operating Modes](#operating-modes) comparison), use the [Tendrl Nano Agent](`https://tendrl.com/docs/nano_agent/`):
 
 #### 1. Start the Tendrl Nano Agent
 
