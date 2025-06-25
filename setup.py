@@ -8,7 +8,7 @@ with open("requirements.txt", "r", encoding="utf-8") as fh:
 
 setup(
     name="tendrl",
-    version="0.1.3",
+    version="0.1.4",
     author="Tendrl",
     author_email="support@tendrl.com",
     description="A Python SDK for the Tendrl data collection platform with cross-platform UNIX socket support, offline storage, and dynamic batching. Licensed for use with Tendrl services only.",
