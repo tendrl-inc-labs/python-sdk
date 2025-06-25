@@ -255,6 +255,7 @@ get_data()  # Sends immediately, no queuing
 | `db_path` | `str` | `"tendrl_offline.db"` | Custom path for offline storage database |
 | **Advanced** |
 | `check_msg_rate` | `float` | `3.0` | Message check frequency in seconds (server callbacks) |
+| `check_msg_limit` | `int` | `1` | Maximum messages retrieved per server check (1-100) |
 | `callback` | `Callable` | `None` | Optional callback function for server messages |
 
 ### Client Initialization Examples
@@ -268,7 +269,8 @@ client = Client(
     mode="agent",                    # Use Nano Agent for best performance
     offline_storage=True,            # Enable offline persistence
     max_batch_size=500,             # Larger batches
-    target_cpu_percent=80           # Allow higher CPU usage
+    target_cpu_percent=80,          # Allow higher CPU usage
+    check_msg_limit=10              # Retrieve up to 10 server messages per check
 )
 
 # Headless mode for simple scripts
@@ -286,6 +288,26 @@ client = Client(
     target_mem_percent=60           # Conservative memory usage
 )
 ```
+
+### Server Message Checking
+
+The `check_msg_limit` parameter controls how many messages are retrieved from the server when checking for new messages (when using callbacks):
+
+```python
+# Conservative approach - check one message at a time
+client = Client(check_msg_limit=1)    # Default: minimal memory, frequent API calls
+
+# Batch approach - retrieve multiple messages per check  
+client = Client(check_msg_limit=10)   # Better performance, reduced API calls
+
+# High-throughput approach - maximum messages per check
+client = Client(check_msg_limit=100)  # Best for high-volume server messages
+```
+
+**Use Cases:**
+- `check_msg_limit=1`: Low-latency individual message processing, minimal memory usage
+- `check_msg_limit=10-50`: Balanced performance for moderate server message volume  
+- `check_msg_limit=100`: High-throughput scenarios with frequent server messages
 
 ### Message Publishing
 
