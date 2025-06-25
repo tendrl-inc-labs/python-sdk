@@ -34,6 +34,7 @@ class Client:
         "client",
         "_stop_event",
         "check_msg_rate",
+        "check_msg_limit",
         "_run_lock",
         "_last_msg_check",
         "debug",
@@ -60,6 +61,7 @@ class Client:
         mode: str = "api",
         api_key: str = None,
         check_msg_rate: float = 3,
+        check_msg_limit: int = 1,
         debug: bool = False,
         target_cpu_percent: float = 65.0,
         target_mem_percent: float = 75.0,
@@ -79,6 +81,7 @@ class Client:
             mode: Operating mode ('api' or 'agent') (default: 'api')
             api_key: API key for authentication (or use TENDRL_KEY env var)
             check_msg_rate: Message check frequency in seconds (default: every 3 seconds)
+            check_msg_limit: Maximum number of messages to retrieve (default: 1)
             debug: Enable debug logging (default: False)
             target_cpu_percent: Target CPU usage for batch sizing (default: 65.0)
             target_mem_percent: Target memory usage for batch sizing (default: 75.0)
@@ -100,6 +103,7 @@ class Client:
 
         self.mode = mode if mode == "api" else "agent"
         self.check_msg_rate = check_msg_rate
+        self.check_msg_limit = check_msg_limit
         self.debug = debug
         self.queue = Queue(maxsize=max_queue_size)
         self._run_lock = threading.Lock()
@@ -181,7 +185,7 @@ class Client:
             # Unix/Linux: Standard /var/lib location
             return "/var/lib/tendrl/tendrl_agent.sock"
 
-    def check_msg(self, limit: int = 1) -> None:
+    def check_msg(self) -> None:
         """Check for messages from the server.
 
         Args:
@@ -199,7 +203,7 @@ class Client:
             else:
                 try:
                     response = self.client.get(
-                        url=f"/entities/check_messages?limit={limit}"
+                        url=f"/entities/check_messages?limit={self.check_msg_limit}"
                     )
 
                     if response.status_code == 204:
@@ -211,7 +215,7 @@ class Client:
                         # I think could make a decorator to wrap this as like a middleware, if it is a server event, have server cb like in MP
                         messages = response.json().get("messages")
                         if messages:
-                            if limit == 1:
+                            if self.check_msg_limit == 1:
                                 self.callback(messages[0])
                             else:
                                 for message in messages:
