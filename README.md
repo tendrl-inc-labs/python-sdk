@@ -1,31 +1,10 @@
 # Tendrl Python SDK
 
-[![Version](https://img.shields.io/badge/version-0.1.4-blue.svg)](https://github.com/tendrl-inc/clients/nano_agent)
+[![Version](https://img.shields.io/badge/version-0.1.5-blue.svg)](https://github.com/tendrl-inc/clients/nano_agent)
 ![Python Version](https://img.shields.io/badge/python-3.9%2B-blue.svg)
-[![License](https://img.shields.io/badge/license-Proprietary-red.svg)](files/LICENSE)
+[![License](https://img.shields.io/badge/license-Proprietary-red.svg)](LICENSE)
 
 A Python SDK for the Tendrl data collection platform with cross-platform UNIX socket support, offline storage, and dynamic batching.
-
-## ⚠️ License Notice
-
-**This software is licensed for use with Tendrl services only.**
-
-### ✅ Allowed
-
-- Use the software with Tendrl services
-- Inspect and learn from the code for educational purposes
-- Modify or extend the software for personal or Tendrl-related use
-
-### ❌ Not Allowed
-
-- Use in any competing product or service
-- Connect to any backend not operated by Tendrl, Inc.
-- Package into any commercial or hosted product (e.g., SaaS, PaaS)
-- Copy design patterns or protocol logic for another system without permission
-
-For licensing questions, contact: `support@tendrl.com`
-
-See the [LICENSE](`https://github.com/tendrl-inc-labs/python-sdk/blob/main/LICENSE`) file for complete terms and restrictions.
 
 ## Features
 
@@ -255,59 +234,53 @@ get_data()  # Sends immediately, no queuing
 | `db_path` | `str` | `"tendrl_offline.db"` | Custom path for offline storage database |
 | **Advanced** |
 | `check_msg_rate` | `float` | `3.0` | Message check frequency in seconds (server callbacks) |
-| `check_msg_limit` | `int` | `1` | Maximum messages retrieved per server check (1-100) |
 | `callback` | `Callable` | `None` | Optional callback function for server messages |
 
-### Client Initialization Examples
+### Message Callbacks
 
 ```python
-# Basic usage
-client = Client(mode="api", api_key="your_key")
+# Set up callback to handle incoming messages
+def message_handler(message):
+    # Process incoming message
+    print(f"Received: {message['msg_type']} from {message['source']}")
+    return True  # Return False if processing fails
 
-# High-performance with offline storage
-client = Client(
-    mode="agent",                    # Use Nano Agent for best performance
-    offline_storage=True,            # Enable offline persistence
-    max_batch_size=500,             # Larger batches
-    target_cpu_percent=80,          # Allow higher CPU usage
-    check_msg_limit=10              # Retrieve up to 10 server messages per check
-)
+client.set_message_callback(message_handler)
 
-# Headless mode for simple scripts
-client = Client(
-    mode="api", 
-    api_key="your_key",
-    headless=True                   # Synchronous, no background processing
-)
+# Configure checking behavior (optional)
+client.set_message_check_rate(5.0)  # Check every 5 seconds (default: 3.0)
+client.set_message_check_limit(10)  # Max messages per check (default: 1)
 
-# Raspberry Pi optimized
-client = Client(
-    mode="api",
-    max_queue_size=100,             # Smaller memory footprint
-    max_batch_size=20,              # Smaller batches
-    target_mem_percent=60           # Conservative memory usage
-)
+# Manual message check (works in any mode)
+messages = client.check_messages()
 ```
 
-### Server Message Checking
+### IncomingMessage Structure
 
-The `check_msg_limit` parameter controls how many messages are retrieved from the server when checking for new messages (when using callbacks):
+| Field | Type | Description | Required |
+|-------|------|-------------|----------|
+| `msg_type` | `str` | Message type identifier (e.g., "command", "notification", "alert") | ✅ Yes |
+| `source` | `str` | Sender's resource path (set by server) | ✅ Yes |
+| `dest` | `str` | Destination entity identifier | ❌ Optional |
+| `timestamp` | `str` | RFC3339 timestamp (set by server) | ✅ Yes |
+| `data` | `dict/list/any` | The actual message payload (can be any JSON type) | ✅ Yes |
+| `context` | `dict` | Message metadata | ❌ Optional |
+| `request_id` | `str` | Request identifier (if message was a request) | ❌ Optional |
 
-```python
-# Conservative approach - check one message at a time
-client = Client(check_msg_limit=1)    # Default: minimal memory, frequent API calls
+### Message Context Structure
 
-# Batch approach - retrieve multiple messages per check  
-client = Client(check_msg_limit=10)   # Better performance, reduced API calls
+| Field | Type | Description | Required |
+|-------|------|-------------|----------|
+| `tags` | `List[str]` | Message tags for categorization | ❌ Optional |
+| `dynamicActions` | `dict` | Server-side validation results | ❌ Optional |
 
-# High-throughput approach - maximum messages per check
-client = Client(check_msg_limit=100)  # Best for high-volume server messages
-```
+#### How It Works
 
-**Use Cases:**
-- `check_msg_limit=1`: Low-latency individual message processing, minimal memory usage
-- `check_msg_limit=10-50`: Balanced performance for moderate server message volume  
-- `check_msg_limit=100`: High-throughput scenarios with frequent server messages
+1. **Background Checking**: In standard mode, the SDK automatically checks for messages every 3 seconds (configurable)
+2. **Manual Checking**: You can call `check_messages()` manually in any mode
+3. **Callback Execution**: Your callback function is called for each incoming message
+4. **Error Handling**: Failed callbacks don't stop other message processing
+5. **Connectivity Aware**: Automatically handles network failures and updates connectivity state
 
 ### Message Publishing
 
