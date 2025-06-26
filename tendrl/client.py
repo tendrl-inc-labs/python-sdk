@@ -14,7 +14,7 @@ from tendrl.utils import make_message
 from tendrl.utils.utils import get_system_metrics, calculate_dynamic_batch_size
 from .storage import SQLiteStorage
 
-VERSION = "0.1.3"
+VERSION = "0.1.6"
 
 class APIException(Exception):
     """Exception raised for API-related errors."""
@@ -134,18 +134,13 @@ class Client:
             if not api_key:
                 raise APIException("No api_key provided and TENDRL_KEY env var not set")
             
-            # Create custom User-Agent with version and platform info
-            python_version = f"{platform.python_version()}"
-            system_info = f"{platform.system()}/{platform.release()}"
-            user_agent = f"tendrl-python-sdk/{VERSION} (Python/{python_version}; {system_info})"
-            
             self.client = httpx.Client(
                 http2=True,
                 base_url="https://app.tendrl.com/api",
                 headers={
                     "Authorization": f"Bearer {api_key}",
-                    "User-Agent": user_agent,
-                },
+                    "User-Agent": f"tendrl-python-sdk/{VERSION}"
+                }
             )
 
         self._last_cleanup = time.time() * 1000
