@@ -341,7 +341,12 @@ class Client:
                 )
 
                 if response.status_code == 200 and response.content:
+                    # API returns {"code": 200, "content": id}
                     return response.json()
+                elif response.status_code != 200:
+                    if self.debug:
+                        print(f"Message publish failed with status {response.status_code}: {response.text}")
+                    return None
         except httpx.HTTPError as error:
             return error
         except socket.error as e:
@@ -376,13 +381,16 @@ class Client:
                         self._publish_message(message)
                 else:
                     # Use batch endpoint for HTTP API
+                    # API expects array directly, not wrapped in "messages" key
                     response = self.client.post(
                         url="/entities/messages",  # Batch endpoint
-                        json={"messages": batch_messages},
+                        json=batch_messages,  # Send array directly
                         timeout=30,  # Longer timeout for batch requests
                     )
                     if self.debug and response.status_code != 200:
                         print(f"Batch request failed with status {response.status_code}")
+                    # API returns {"code": 200, "content": messageIDs}
+                    # Response is handled silently for batch operations
             except Exception as e:
                 if self.debug:
                     print(f"Batch request failed: {e}, falling back to individual requests")
