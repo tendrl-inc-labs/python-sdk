@@ -1,9 +1,10 @@
 import datetime
-#import platform
 import socket
 from typing import Union
 from zoneinfo import ZoneInfo
 import psutil
+
+from tendrl.models import Message, Context
 
 
 class SystemMetrics:
@@ -87,13 +88,13 @@ def calculate_dynamic_batch_size(
 
 
 def make_message(
-    data,
-    msg_type,
+    data: Union[dict, str],
+    msg_type: str,
     tags=None,
     entity="",
     timestamp=None,
     wait_response=False,
-):
+) -> Message:
     """Create a message in the format expected by the Tendrl API.
     
     Args:
@@ -105,7 +106,7 @@ def make_message(
         wait_response: Whether to wait for response
         
     Returns:
-        dict: Formatted message
+        Message: Formatted message model instance
     """
     if not isinstance(data, (str, dict)):
         raise TypeError("Allowed types: ['str', 'dict']")
@@ -115,20 +116,28 @@ def make_message(
         if not all(isinstance(i, str) for i in tags):
             raise TypeError("tags must be of type 'str'")
     
-    context = {"tags": tags} if tags else {}
-    if wait_response and not entity:
-        context["wait"] = True
+    # Create Context model if needed
+    context = None
+    if tags or wait_response:
+        context = Context(
+            tags=tags if tags else None,
+            wait=True if (wait_response and not entity) else None
+        )
     
-    m = {
-        "msg_type": msg_type,
-        "data": data,
-        "context": context,
-        "dest": entity,
-        "timestamp": datetime.datetime.now(ZoneInfo("UTC")).isoformat(
-            timespec="milliseconds"
-        ) if not timestamp else timestamp,
-    }
-    return {k: v for k, v in m.items() if v}
+    # Use provided timestamp or current UTC time
+    if timestamp is None:
+        timestamp = datetime.datetime.now(ZoneInfo("UTC"))
+    elif isinstance(timestamp, str):
+        # Keep as string, validator will parse it
+        pass
+    
+    return Message(
+        msg_type=msg_type,
+        data=data,
+        context=context,
+        dest=entity if entity else None,
+        timestamp=timestamp,
+    )
 
 def connect(api_key: str, mode: str) -> bool:
     if not internet():

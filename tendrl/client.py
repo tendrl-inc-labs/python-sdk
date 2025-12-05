@@ -1,4 +1,3 @@
-# import dbm
 import json
 import os
 import platform
@@ -12,6 +11,7 @@ import httpx
 
 from tendrl.utils import make_message
 from tendrl.utils.utils import get_system_metrics, calculate_dynamic_batch_size
+from tendrl.models import Message
 from .storage import SQLiteStorage
 
 VERSION = "0.1.6"
@@ -310,16 +310,22 @@ class Client:
         """Publish a single message to the server.
 
         Args:
-            message: Message to publish
+            message: Message to publish (Message model or dict)
             timeout: Request timeout in seconds
         """
+        # Convert Message model to dict for JSON serialization
+        if isinstance(message, Message):
+            message_dict = message.model_dump()
+        else:
+            message_dict = message
+        
         try:
             if self.mode == "agent":
                 original_timeout = self.sock.gettimeout() if timeout else None
 
                 try:
-                    self.sock.sendall(json.dumps(message).encode("utf-8"))
-                    if message.get("context", {}).get("wait"):
+                    self.sock.sendall(json.dumps(message_dict).encode("utf-8"))
+                    if message_dict.get("context", {}).get("wait"):
                         msg_id = json.loads(self.sock.recv(1024).decode()).get("id")
                         return msg_id
                 except socket.timeout as err:
@@ -336,7 +342,7 @@ class Client:
             else:  # HTTP Client Mode
                 response = self.client.post(
                     url="/entities/message",
-                    json=message,
+                    json=message_dict,
                     timeout=timeout,
                 )
 
@@ -353,11 +359,11 @@ class Client:
             if self.debug:
                 print(f"Agent Socket Error: {e}")
 
-    def _publish_messages(self, messages: List[dict]) -> None:
+    def _publish_messages(self, messages: List[Union[dict, Message]]) -> None:
         """Publish a batch of messages to the server.
 
         Args:
-            messages: List of messages to publish
+            messages: List of messages to publish (Message models or dicts)
         """
         if not messages:
             return
@@ -367,7 +373,9 @@ class Client:
         batch_messages = []
         
         for message in messages:
-            if message.get("context", {}).get("wait"):
+            # Convert Message to dict for checking
+            msg_dict = message.model_dump() if isinstance(message, Message) else message
+            if msg_dict.get("context", {}).get("wait"):
                 individual_messages.append(message)
             else:
                 batch_messages.append(message)
@@ -380,11 +388,16 @@ class Client:
                     for message in batch_messages:
                         self._publish_message(message)
                 else:
+                    # Convert Message models to dicts for JSON serialization
+                    batch_dicts = [
+                        msg.model_dump() if isinstance(msg, Message) else msg
+                        for msg in batch_messages
+                    ]
                     # Use batch endpoint for HTTP API
                     # API expects array directly, not wrapped in "messages" key
                     response = self.client.post(
                         url="/entities/messages",  # Batch endpoint
-                        json=batch_messages,  # Send array directly
+                        json=batch_dicts,  # Send array directly
                         timeout=30,  # Longer timeout for batch requests
                     )
                     if self.debug and response.status_code != 200:
@@ -467,10 +480,13 @@ class Client:
                                 for message in batch:
                                     try:
                                         msg_id = f"offline_{int(time.time() * 1000)}_{id(message)}"
+                                        # Convert Message to dict if needed
+                                        msg_dict = message.model_dump() if isinstance(message, Message) else message
+                                        context = msg_dict.get('context', {})
                                         self.storage.store(
                                             msg_id,
-                                            message.get('data', {}),
-                                            tags=message.get('tags'),
+                                            msg_dict.get('data', {}),
+                                            tags=context.get('tags') if context else None,
                                             ttl=3600
                                         )
                                         if self.debug:
