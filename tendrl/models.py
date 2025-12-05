@@ -7,7 +7,7 @@ from pydantic import BaseModel
 class Message(BaseModel):
     msg_type: str
     data: dict | str
-    context = Optional[dict]
+    context: Optional[dict]
     dest: Optional[str]
     timestamp: datetime
 
