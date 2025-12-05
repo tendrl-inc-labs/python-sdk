@@ -14,7 +14,7 @@ from tendrl.utils.utils import get_system_metrics, calculate_dynamic_batch_size
 from tendrl.models import Message
 from .storage import SQLiteStorage
 
-VERSION = "0.1.6"
+VERSION = "0.1.7"
 
 class APIException(Exception):
     """Exception raised for API-related errors."""

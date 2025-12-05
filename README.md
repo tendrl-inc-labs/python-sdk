@@ -1,6 +1,6 @@
 # Tendrl Python SDK
 
-[![Version](https://img.shields.io/badge/version-0.1.6-blue.svg)](https://github.com/tendrl-inc/clients/nano_agent)
+[![Version](https://img.shields.io/badge/version-0.1.7-blue.svg)](https://github.com/tendrl-inc/clients/nano_agent)
 ![Python Version](https://img.shields.io/badge/python-3.9%2B-blue.svg)
 [![License](https://img.shields.io/badge/license-Proprietary-red.svg)](LICENSE)
 
@@ -8,34 +8,34 @@ A Python SDK for the Tendrl data collection platform with cross-platform UNIX so
 
 ## Features
 
-- 🔌 **Cross-Platform Communication**: Windows 10 1803+, Linux, macOS
-- 🔄 **Dual Operating Modes**: HTTP API and Tendrl Nano Agent (Unix Socket)  
-- 💾 **Offline Message Storage**: SQLite-based persistence with TTL
-- ⚡ **Dynamic Batching**: CPU/memory-aware batch sizing
-- 🎯 **Resource Monitoring**: Automatic system resource adaptation
-- 🔐 **Secure Communication**: AF_UNIX sockets + HTTPS API
-- 📊 **Performance Metrics**: Built-in system monitoring utilities
+- **Cross-Platform Communication**: Windows 10 1803+, Linux, macOS
+- **Dual Operating Modes**: HTTP API and Tendrl Nano Agent (Unix Socket)  
+- **Offline Message Storage**: SQLite-based persistence with TTL
+- **Dynamic Batching**: CPU/memory-aware batch sizing
+- **Resource Monitoring**: Automatic system resource adaptation
+- **Secure Communication**: AF_UNIX sockets + HTTPS API
+- **Performance Metrics**: Built-in system monitoring utilities
 
 ## Platform Support
 
 ### Windows
 
 - **Requirements**: Windows 10 version 1803+ or Windows Server 2019+ (Agent Mode)
-- **Recommended**: Use [Tendrl Nano Agent](`https://tendrl.com/docs/nano_agent/`) for optimal performance
+- **Recommended**: Use Tendrl Nano Agent for optimal performance
 - **Agent Installation**: Download and run `tendrl-agent.exe` with your API key
 - **Connection**: Python SDK connects automatically to the local agent
 
 ### Unix/Linux/macOS
 
 - **Native Support**: Works on all modern versions
-- **Recommended**: Use [Tendrl Nano Agent](`https://tendrl.com/docs/nano_agent/`) for optimal performance
+- **Recommended**: Use Tendrl Nano Agent for optimal performance
 - **Direct API**: Can also connect directly to Tendrl API without local agent
 
 ## Operating Modes
 
 The Python SDK supports two operating modes optimized for different use cases:
 
-### 📡 Direct API Mode (Recommended for Simplicity)
+### Direct API Mode (Recommended for Simplicity)
 
 **How it works**: Python SDK → HTTP/2 → Tendrl Server
 
@@ -61,7 +61,7 @@ client = Client(mode="api", api_key="your_key")  # Direct to server
 - **Batching**: True HTTP batching - multiple messages per HTTP request
 - **Resource usage**: Higher CPU/memory due to Python interpreted overhead
 
-### 🚀 Nano Agent Mode (Recommended for Performance)
+### Nano Agent Mode (Recommended for Performance)
 
 **How it works**: Python SDK → Unix Socket → Go Nano Agent → HTTP/2 → Tendrl Server
 
@@ -89,7 +89,7 @@ client = Client(mode="agent")  # Connects to local Go agent
 - **Batching**: More intelligent batching algorithms in Go
 - **Resource usage**: Significantly lower CPU/memory per message
 
-### 📊 Feature & Performance Comparison
+### Feature & Performance Comparison
 
 | Feature | Agent Mode | Direct API Mode |
 |---------|------------|-----------------|
@@ -107,7 +107,7 @@ client = Client(mode="agent")  # Connects to local Go agent
 | **Debugging** | ⚠️ Two-component system | ✅ Direct HTTP visibility |
 | **Deployment** | ⚠️ Two processes to manage | ✅ Single process |
 
-### 🏆 Key Differentiators
+### Key Differentiators
 
 **Agent Mode Advantages:**
 
@@ -123,7 +123,7 @@ client = Client(mode="agent")  # Connects to local Go agent
 - **Single Process**: Easier debugging and deployment
 - **Immediate Feedback**: Each publish() call gets direct server response
 
-### 💡 Choosing the Right Mode
+### Choosing the Right Mode
 
 **Use Direct API Mode when:**
 
@@ -171,7 +171,7 @@ def collect_metrics():
     }
 
 # Periodic data collection
-@client.tether(tags=["system"], interval=60)
+@client.tether(tags=["system"])
 def system_stats():
     return {
         "uptime": 3600,
@@ -259,11 +259,11 @@ messages = client.check_messages()
 
 | Field | Type | Description | Required |
 |-------|------|-------------|----------|
-| `msg_type` | `str` | Message type identifier (e.g., "command", "notification", "alert") | ✅ Yes |
+| `msg_type` | `str` | Message type identifier (e.g., "publish", "heartbeat") | ✅ Yes |
 | `source` | `str` | Sender's resource path (set by server) | ✅ Yes |
 | `dest` | `str` | Destination entity identifier | ❌ Optional |
 | `timestamp` | `str` | RFC3339 timestamp (set by server) | ✅ Yes |
-| `data` | `dict/list/any` | The actual message payload (can be any JSON type) | ✅ Yes |
+| `data` | `dict` | The actual message payload (can be any JSON type) | ✅ Yes |
 | `context` | `dict` | Message metadata | ❌ Optional |
 | `request_id` | `str` | Request identifier (if message was a request) | ❌ Optional |
 
@@ -508,7 +508,7 @@ Server processes webhook
 
 ### Using with Tendrl Nano Agent
 
-For optimal performance (see [Operating Modes](#operating-modes) comparison), use the [Tendrl Nano Agent](`https://tendrl.com/docs/nano_agent/`):
+For optimal performance use the Tendrl Nano Agent
 
 #### 1. Start the Tendrl Nano Agent
 
@@ -547,5 +547,3 @@ client.publish({"sensor": "temperature", "value": 23.5})
 client = Client(mode="api", api_key="your_key")
 client.start()
 ```
-
-> **Performance Note**: Agent mode provides 5-20x better performance than direct API mode. See the [Operating Modes](#operating-modes) section for detailed comparison.
