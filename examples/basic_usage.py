@@ -5,6 +5,7 @@ Basic Tendrl SDK Usage Example
 This example demonstrates the fundamental features of the Tendrl Python SDK:
 - Direct API mode vs Agent mode
 - Basic publish operations
+- Receiving and handling incoming messages via callbacks
 - Using decorators for automatic data collection
 - Error handling and graceful shutdown
 """
@@ -29,19 +30,65 @@ client = Client(
     mode="api",  # Use "agent" for Nano Agent mode
     debug=True,
     max_batch_size=50,
-    max_queue_size=1000
+    max_queue_size=1000,
+    check_msg_rate=3,  # Check for incoming messages every 3 seconds
+    check_msg_limit=10  # Retrieve up to 10 messages per check
 )
 
-def callback(response):
-    """Optional callback to handle server responses"""
-    print(f"✓ Message sent successfully at {response.get('timestamp')}")
-    print(f"  Server response: {response.get('status', 'OK')}")
+def message_callback(message):
+    """
+    Callback function to handle incoming messages from the server.
+    
+    This callback is called automatically when messages are received via check_msg().
+    The message structure includes:
+    - msg_type: Type of message (e.g., "command", "notification")
+    - data: The message payload (dict, list, or any JSON type)
+    - source: Sender's resource path
+    - timestamp: RFC3339 timestamp
+    - context: Optional metadata including tags
+    """
+    print("\n" + "="*60)
+    print("📨 INCOMING MESSAGE RECEIVED")
+    print("="*60)
+    
+    # Check message type
+    msg_type = message.get("msg_type", "unknown")
+    print(f"Message Type: {msg_type}")
+    
+    # Get source information
+    source = message.get("source", "unknown")
+    print(f"From: {source}")
+    
+    # Get timestamp
+    timestamp = message.get("timestamp", "unknown")
+    print(f"Timestamp: {timestamp}")
+    
+    # Get message data
+    data = message.get("data", {})
+    print(f"Data Type: {type(data).__name__}")
+    print(f"Data Content: {data}")
+    
+    # Check for context and tags
+    context = message.get("context", {})
+    if context:
+        tags = context.get("tags", [])
+        if tags:
+            print(f"Tags: {', '.join(tags)}")
+    
+    print("="*60 + "\n")
+    
+    # Return True to indicate successful processing
+    # Return False if processing failed (won't stop other messages)
+    return True
 
-client.callback = callback
+# Set the callback for incoming messages
+client.callback = message_callback
 client.start()
 
 print("Starting Tendrl SDK Basic Usage Example...")
 print("Press Ctrl+C to stop\n")
+print("📡 The client will automatically check for incoming messages every 3 seconds")
+print("   Messages will be processed through the message_callback function\n")
 
 # Example 1: Simple string message
 print("1. Sending simple string message...")
@@ -145,12 +192,25 @@ print("   ✓ All sensor readings queued for batch sending\n")
 print("Waiting for all messages to be sent...")
 time.sleep(3)
 
-print("\nExample completed successfully!")
-print("The client will continue running. Press Ctrl+C to stop.")
+print("\n" + "="*60)
+print("Example completed successfully!")
+print("="*60)
+print("\nThe client is now running and will:")
+print("  ✓ Continue checking for incoming messages every 3 seconds")
+print("  ✓ Process any received messages through the callback")
+print("  ✓ Keep the connection alive for receiving messages")
+print("\nTo test message receiving:")
+print("  1. Send a message to this entity from another entity or the web UI")
+print("  2. The message will be automatically received and processed")
+print("  3. Watch the console for incoming message notifications")
+print("\nPress Ctrl+C to stop.\n")
 
-# Keep the client running
+# Keep the client running to receive messages
 try:
     while True:
+        # The client automatically checks for messages in the background
+        # You can also manually check if needed:
+        # client.check_msg()
         time.sleep(1)
 except KeyboardInterrupt:
     pass 

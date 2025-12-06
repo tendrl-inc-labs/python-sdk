@@ -6,12 +6,14 @@ import socket
 import threading
 import time
 from typing import Callable, List, Union
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import httpx
 
 from tendrl.utils import make_message
-from tendrl.utils.utils import get_system_metrics, calculate_dynamic_batch_size
-from tendrl.models import Message
+from tendrl.utils.utils import get_system_metrics, calculate_dynamic_batch_size, get_system_resources
+from tendrl.models import Message, HeartbeatMessage, HeartbeatData
 from .storage import SQLiteStorage
 
 VERSION = "0.1.7"
@@ -54,6 +56,9 @@ class Client:
         "_last_connection_check",
         "_is_windows",
         "headless",
+        "send_heartbeat",
+        "heartbeat_interval",
+        "_last_heartbeat",
     )
 
     def __init__(
@@ -74,6 +79,8 @@ class Client:
         callback: Callable = None,
         max_queue_size: int = 1000,
         headless: bool = False,
+        send_heartbeat: bool = True,
+        heartbeat_interval: int = 30,
     ):
         """Initialize Tendrl client with optional offline storage and dynamic batching.
 
@@ -94,6 +101,8 @@ class Client:
             callback: Optional callback for message handling (default: None)
             max_queue_size: Maximum size of the message queue (default: 1000)
             headless: Pure SDK mode - no background processing (default: False)
+            send_heartbeat: Enable automatic heartbeat messages (default: True)
+            heartbeat_interval: Interval between heartbeats in seconds (default: 30)
         """
         self.callback = None
         if callback:
@@ -154,6 +163,11 @@ class Client:
 
         self._connection_state = True  # Assume connected initially
         self._last_connection_check = time.time() * 1000
+        
+        # Heartbeat configuration
+        self.send_heartbeat = send_heartbeat and not headless  # Disable in headless mode
+        self.heartbeat_interval = heartbeat_interval
+        self._last_heartbeat = 0
 
     def _connect_to_agent(self):
         """Establish connection to the agent using AF_UNIX socket."""
@@ -202,33 +216,83 @@ class Client:
                     )
 
                     if response.status_code == 204:
+                        # No messages available
                         return
+                    
                     if response.status_code != 200:
+                        # Log error for non-200 status codes
+                        if self.debug:
+                            print(f"❌ check_messages failed with status {response.status_code}: {response.text}")
                         return
-                    if self.callback:
-                        # This may need to be ran in another thread or async, it could kill the program..or a timeout
-                        # I think could make a decorator to wrap this as like a middleware, if it is a server event, have server cb like in MP
-                        messages = response.json().get("messages")
-                        if messages:
-                            if self.check_msg_limit == 1:
-                                self.callback(messages[0])
-                            else:
-                                for message in messages:
-                                    try:
-                                        self.callback(message)
-                                    except Exception as e:
-                                        if self.debug:
-                                            print(f"error in callback: {e}")
+                    
+                    # Parse response JSON
+                    try:
+                        response_data = response.json()
+                    except json.JSONDecodeError:
+                        if self.debug:
+                            print("❌ Failed to decode JSON from check_messages response")
+                        return
+                    
+                    # Extract messages from response
+                    messages = response_data.get("messages")
+                    if not messages:
+                        # No messages in response (shouldn't happen with 200, but handle gracefully)
+                        return
+                    
+                    # Ensure messages is a list
+                    if not isinstance(messages, list):
+                        if self.debug:
+                            print(f"❌ Expected messages to be a list, got {type(messages)}")
+                        return
+                    
+                    # If no callback is set, log a warning in debug mode
+                    if not self.callback:
+                        if self.debug:
+                            print(f"⚠️ Received {len(messages)} message(s) but no callback is set")
+                        return
+                    
+                    # Process messages through callback
+                    # The API returns CheckMessage format: {data, tags, source, timestamp}
+                    # We need to transform it to match the expected Message format: {msg_type, data, context: {tags}, source, timestamp}
+                    for message in messages:
+                        if not isinstance(message, dict):
+                            if self.debug:
+                                print(f"⚠️ Skipping invalid message format: {type(message)}")
+                            continue
+                        
+                        # Transform CheckMessage to Message format
+                        # 1. Add msg_type if missing (default to "command" for incoming messages)
+                        if "msg_type" not in message:
+                            message["msg_type"] = "command"
+                        
+                        # 2. Move tags to context.tags if tags exist at top level
+                        if "tags" in message:
+                            tags = message.pop("tags")
+                            # Only add context if tags is not empty
+                            if tags:
+                                if "context" not in message:
+                                    message["context"] = {}
+                                if not isinstance(message["context"], dict):
+                                    message["context"] = {}
+                                message["context"]["tags"] = tags
+                        
+                        try:
+                            self.callback(message)
+                        except Exception as e:
+                            if self.debug:
+                                print(f"❌ Error in callback processing message: {e}")
+                            # Continue processing other messages even if one fails
+                            
                 except httpx.HTTPError as error:
                     if self.debug:
-                        print(f"httpx error: {error}")
+                        print(f"❌ HTTP error checking messages: {error}")
                     return None
         except json.JSONDecodeError:
             if self.debug:
-                print("Failed to decode JSON from response.")
+                print("❌ Failed to decode JSON from response.")
         except socket.error as e:
             if self.debug:
-                print(f"Socket error: {e}")
+                print(f"❌ Socket error: {e}")
 
     def publish(
         self, msg: Union[dict, str], tags=None, entity="",
@@ -292,9 +356,17 @@ class Client:
         """Start the message sender thread."""
         if not self.headless and self.sender_thread:
             self.sender_thread.start()
+        
+        # Update entity status to online
+        if self.mode == "api":
+            self._update_entity_status(online=True)
 
     def stop(self):
         """Stop the client and cleanup resources."""
+        # Update entity status to offline before stopping
+        if self.mode == "api":
+            self._update_entity_status(online=False)
+        
         if not self.headless and self.sender_thread:
             self._stop_event.set()
             self.queue.put(None)  # Send stop signal to sender thread
@@ -503,6 +575,17 @@ class Client:
                         ):
                             self.check_msg()
                             self._last_msg_check = current_time
+                    
+                    # Send heartbeat if enabled and interval has passed
+                    if self.send_heartbeat and self._connection_state:
+                        current_time = time.time()
+                        if (current_time - self._last_heartbeat) >= self.heartbeat_interval:
+                            try:
+                                self._send_heartbeat()
+                                self._last_heartbeat = current_time
+                            except Exception as e:
+                                if self.debug:
+                                    print(f"Heartbeat error: {e}")
 
                     # Sleep to avoid overloading the system if time spent is less than interval
                     elapsed_time = time.time() * 1000 - start_time
@@ -605,3 +688,64 @@ class Client:
 
         if self.debug and processed > 0:
             print(f"Finished processing offline messages: {processed} total")
+    
+    def _update_entity_status(self, online: bool) -> None:
+        """Update entity online/offline status via API endpoint.
+        
+        Args:
+            online: True to mark entity as online, False to mark as offline
+        """
+        if self.mode != "api":
+            return  # Only works in API mode
+        
+        try:
+            response = self.client.put(
+                url="/entities/status",
+                json={"online": online},
+                timeout=5,
+            )
+            
+            if response.status_code == 200:
+                if self.debug:
+                    status = "online" if online else "offline"
+                    print(f"✅ Entity status updated to {status}")
+            elif self.debug:
+                print(f"⚠️ Failed to update entity status: {response.status_code} - {response.text}")
+        except Exception as e:
+            if self.debug:
+                print(f"⚠️ Error updating entity status: {e}")
+            # Don't raise - status update failures shouldn't break the client
+    
+    def _send_heartbeat(self) -> None:
+        """Send a heartbeat message with system resource information.
+        
+        Creates a heartbeat message using Pydantic validation to ensure
+        it matches the backend's expected format.
+        """
+        try:
+            # Get system resource information
+            resources = get_system_resources(bytes_only=True)
+            
+            # Create heartbeat data using Pydantic model for validation
+            heartbeat_data = HeartbeatData(**resources)
+            
+            # Create heartbeat message with current UTC timestamp
+            heartbeat_msg = HeartbeatMessage(
+                msg_type="heartbeat",
+                data=heartbeat_data,
+                timestamp=datetime.now(ZoneInfo("UTC"))
+            )
+            
+            # Convert to dict and publish
+            heartbeat_dict = heartbeat_msg.model_dump()
+            
+            if self.debug:
+                print(f"📤 Sending heartbeat: {heartbeat_dict}")
+            
+            # Publish heartbeat message directly (bypass queue for immediate delivery)
+            self._publish_message(heartbeat_dict)
+            
+        except Exception as e:
+            if self.debug:
+                print(f"❌ Error sending heartbeat: {e}")
+            # Don't raise - heartbeat failures shouldn't break the client

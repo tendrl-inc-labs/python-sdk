@@ -40,6 +40,64 @@ def get_system_metrics(queue_size: int, max_queue_size: int) -> SystemMetrics:
     return metrics
 
 
+def get_system_resources(bytes_only: bool = True) -> dict:
+    """Get system resource information for heartbeat messages.
+    
+    Similar to the micropython client's free() function, returns memory and disk
+    information in bytes format compatible with heartbeat message validation.
+    
+    Args:
+        bytes_only: If True, return values in bytes. If False, return formatted strings.
+        
+    Returns:
+        dict: Dictionary with mem_free, mem_total, disk_free, disk_size
+    """
+    # Get memory information
+    mem = psutil.virtual_memory()
+    mem_free = mem.available
+    mem_total = mem.total
+    
+    # Get disk information for root filesystem
+    try:
+        disk = psutil.disk_usage('/')
+        disk_free = disk.free
+        disk_size = disk.total
+    except (OSError, PermissionError):
+        # Fallback: try to get disk info from current working directory
+        try:
+            import os
+            disk = psutil.disk_usage(os.getcwd())
+            disk_free = disk.free
+            disk_size = disk.total
+        except (OSError, PermissionError):
+            # If we can't get disk info, use defaults
+            disk_free = 0
+            disk_size = 0
+    
+    if bytes_only:
+        return {
+            "mem_free": float(mem_free),
+            "mem_total": float(mem_total),
+            "disk_free": float(disk_free),
+            "disk_size": float(disk_size),
+        }
+    else:
+        # Format with units (similar to micropython's convert function)
+        def format_bytes(bytes_val):
+            for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+                if bytes_val < 1024.0:
+                    return f"{bytes_val:.2f} {unit}"
+                bytes_val /= 1024.0
+            return f"{bytes_val:.2f} PB"
+        
+        return {
+            "mem_free": format_bytes(mem_free),
+            "mem_total": format_bytes(mem_total),
+            "disk_free": format_bytes(disk_free),
+            "disk_size": format_bytes(disk_size),
+        }
+
+
 def calculate_dynamic_batch_size(
     metrics: SystemMetrics,
     target_cpu_percent: float = 65.0,
@@ -115,6 +173,11 @@ def make_message(
     else:
         if not all(isinstance(i, str) for i in tags):
             raise TypeError("tags must be of type 'str'")
+    
+    # Backend expects data to be a dict/object, not a string
+    # Wrap string data in a dict to match backend expectations (similar to mqtt_webhook.go)
+    if isinstance(data, str):
+        data = {"data": data}
     
     # Create Context model if needed
     context = None
