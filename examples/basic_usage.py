@@ -41,11 +41,11 @@ def message_callback(message):
     
     This callback is called automatically when messages are received via check_msg().
     The message structure includes:
-    - msg_type: Type of message (e.g., "command", "notification")
+    - msg_type: Type of message (e.g., "publish", "command")
     - data: The message payload (dict, list, or any JSON type)
     - source: Sender's resource path
     - timestamp: RFC3339 timestamp
-    - context: Optional metadata including tags
+    - tags: Optional list of string tags
     """
     print("\n" + "="*60)
     print("📨 INCOMING MESSAGE RECEIVED")
@@ -68,12 +68,10 @@ def message_callback(message):
     print(f"Data Type: {type(data).__name__}")
     print(f"Data Content: {data}")
     
-    # Check for context and tags
-    context = message.get("context", {})
-    if context:
-        tags = context.get("tags", [])
-        if tags:
-            print(f"Tags: {', '.join(tags)}")
+    # Check for tags
+    tags = message.get("tags", [])
+    if tags:
+        print(f"Tags: {', '.join(tags)}")
     
     print("="*60 + "\n")
     

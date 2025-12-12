@@ -252,29 +252,12 @@ class Client:
                         return
                     
                     # Process messages through callback
-                    # The API returns CheckMessage format: {data, tags, source, timestamp}
-                    # We need to transform it to match the expected Message format: {msg_type, data, context: {tags}, source, timestamp}
+                    # The API returns CheckMessage format: {msg_type, data, tags, source, timestamp}
                     for message in messages:
                         if not isinstance(message, dict):
                             if self.debug:
                                 print(f"⚠️ Skipping invalid message format: {type(message)}")
                             continue
-                        
-                        # Transform CheckMessage to Message format
-                        # 1. Add msg_type if missing (default to "command" for incoming messages)
-                        if "msg_type" not in message:
-                            message["msg_type"] = "command"
-                        
-                        # 2. Move tags to context.tags if tags exist at top level
-                        if "tags" in message:
-                            tags = message.pop("tags")
-                            # Only add context if tags is not empty
-                            if tags:
-                                if "context" not in message:
-                                    message["context"] = {}
-                                if not isinstance(message["context"], dict):
-                                    message["context"] = {}
-                                message["context"]["tags"] = tags
                         
                         try:
                             self.callback(message)
