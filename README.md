@@ -282,6 +282,32 @@ messages = client.check_messages()
 4. **Error Handling**: Failed callbacks don't stop other message processing
 5. **Connectivity Aware**: Automatically handles network failures and updates connectivity state
 
+### State Table
+
+The state table is a persistent key-value store associated with your entity. Use it to store device state, configuration, or any data that should be available across sessions.
+
+```python
+# Get the current state table
+state = client.get_state()
+# Returns dict or None
+
+# Merge data into the state table (PATCH - only updates specified keys)
+client.update_state({"temperature": 23.5, "humidity": 60})
+
+# Replace the entire state table (PUT - overwrites all existing keys)
+client.replace_state({"temperature": 23.5, "humidity": 60})
+
+# With tags (triggers flows/webhooks associated with those tags)
+client.update_state({"status": "active"}, tags=["device", "status"])
+```
+
+**Notes:**
+- State table methods are only available in API mode (`mode="api"`)
+- Returns `None` in agent mode
+- `update_state` merges keys (existing keys not in `data` are preserved)
+- `replace_state` overwrites the entire table
+- When `tags` are provided, the body is sent as `{"data": {...}, "tags": [...]}` to trigger associated flows
+
 ### Message Publishing
 
 ```python

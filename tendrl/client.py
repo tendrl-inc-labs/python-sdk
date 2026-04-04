@@ -698,7 +698,112 @@ class Client:
             if self.debug:
                 print(f"⚠️ Error updating entity status: {e}")
             # Don't raise - status update failures shouldn't break the client
-    
+
+    def get_state(self) -> dict:
+        """Get the entity's state table.
+
+        Returns:
+            dict: The state table data, or None if unavailable or in agent mode.
+        """
+        if self.mode != "api":
+            return None
+
+        try:
+            response = self.client.get(
+                url="/entities/status-table",
+                timeout=5,
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                if self.debug:
+                    print(f"State table retrieved: {data}")
+                return data.get("statusTable", data)
+            else:
+                if self.debug:
+                    print(f"Failed to get state table: {response.status_code} - {response.text}")
+                return None
+        except Exception as e:
+            if self.debug:
+                print(f"Error getting state table: {e}")
+            return None
+
+    def update_state(self, data: dict, tags: list = None) -> bool:
+        """Merge data into the entity's state table (PATCH).
+
+        Args:
+            data: Dictionary of key-value pairs to merge into the state table.
+            tags: Optional list of tags. If provided, sends wrapped format.
+
+        Returns:
+            bool: True if successful, False otherwise. None if in agent mode.
+        """
+        if self.mode != "api":
+            return None
+
+        if tags is not None:
+            body = {"data": data, "tags": tags}
+        else:
+            body = data
+
+        try:
+            response = self.client.patch(
+                url="/entities/status-table",
+                json=body,
+                timeout=5,
+            )
+
+            if response.status_code == 200:
+                if self.debug:
+                    print(f"State table updated: {body}")
+                return True
+            else:
+                if self.debug:
+                    print(f"Failed to update state table: {response.status_code} - {response.text}")
+                return False
+        except Exception as e:
+            if self.debug:
+                print(f"Error updating state table: {e}")
+            return False
+
+    def replace_state(self, data: dict, tags: list = None) -> bool:
+        """Replace the entity's state table (PUT).
+
+        Args:
+            data: Dictionary of key-value pairs to replace the state table with.
+            tags: Optional list of tags. If provided, sends wrapped format.
+
+        Returns:
+            bool: True if successful, False otherwise. None if in agent mode.
+        """
+        if self.mode != "api":
+            return None
+
+        if tags is not None:
+            body = {"data": data, "tags": tags}
+        else:
+            body = data
+
+        try:
+            response = self.client.put(
+                url="/entities/status-table",
+                json=body,
+                timeout=5,
+            )
+
+            if response.status_code == 200:
+                if self.debug:
+                    print(f"State table replaced: {body}")
+                return True
+            else:
+                if self.debug:
+                    print(f"Failed to replace state table: {response.status_code} - {response.text}")
+                return False
+        except Exception as e:
+            if self.debug:
+                print(f"Error replacing state table: {e}")
+            return False
+
     def _send_heartbeat(self) -> None:
         """Send a heartbeat message with system resource information.
         
