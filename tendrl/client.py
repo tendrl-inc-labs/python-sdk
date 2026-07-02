@@ -77,6 +77,7 @@ class Client:
         offline_storage: bool = False,
         db_path: str = "tendrl_offline.db",
         callback: Callable = None,
+        state_callback: Callable = None,
         max_queue_size: int = 1000,
         headless: bool = False,
         send_heartbeat: bool = True,
@@ -99,6 +100,7 @@ class Client:
             offline_storage: Enable message persistence (default: False)
             db_path: Custom path for storage database (default: tendrl_offline.db)
             callback: Optional callback for message handling (default: None)
+            state_callback: Optional callback for state table changes (default: None)
             max_queue_size: Maximum size of the message queue (default: 1000)
             headless: Pure SDK mode - no background processing (default: False)
             send_heartbeat: Enable automatic heartbeat messages (default: True)
@@ -109,6 +111,16 @@ class Client:
             if not callable(callback):
                 raise TypeError("callback must be a callable function accepting dict")
             self.callback = callback
+        self._routes = []
+        self._default_handler = None
+        self.state_callback = None
+        if state_callback:
+            if not callable(state_callback):
+                raise TypeError("state_callback must be a callable function accepting dict")
+            self.state_callback = state_callback
+        self._state_handler = None
+        self._last_state = None
+        self._last_state_initialized = False
 
         self.mode = mode if mode == "api" else "agent"
         self.check_msg_rate = check_msg_rate
@@ -194,6 +206,105 @@ class Client:
             # Unix/Linux: Standard /var/lib location
             return "/var/lib/tendrl/tendrl_agent.sock"
 
+    def on(self, msg_type=None, tag=None, tags=None, tags_all=None):
+        def decorator(fn):
+            self._routes.append({
+                "msg_type": msg_type,
+                "tag": tag,
+                "tags": tags,
+                "tags_all": tags_all,
+                "fn": fn,
+            })
+            return fn
+        return decorator
+
+    def on_default(self, fn):
+        self._default_handler = fn
+        return fn
+
+    def on_state(self, fn):
+        self._state_handler = fn
+        return fn
+
+    def _has_message_handlers(self):
+        return bool(self._routes or self._default_handler or self.callback)
+
+    def _has_state_handler(self):
+        return self._state_handler is not None or self.state_callback is not None
+
+    def _has_inbound_handlers(self):
+        return self._has_message_handlers() or self._has_state_handler()
+
+    @staticmethod
+    def _state_snapshot(state):
+        return json.dumps(state, sort_keys=True, default=str)
+
+    def _dispatch_state(self, state):
+        if self._state_handler:
+            return self._state_handler(state)
+        if self.state_callback:
+            return self.state_callback(state)
+
+    def _fetch_status_table(self):
+        if self.mode != "api" or not hasattr(self, "client"):
+            return None
+        try:
+            response = self.client.get("/entities/status-table")
+            if response.status_code != 200:
+                if self.debug:
+                    print(f"❌ status-table failed with status {response.status_code}")
+                return None
+            data = response.json()
+            return data.get("statusTable")
+        except httpx.HTTPError as error:
+            if self.debug:
+                print(f"❌ HTTP error fetching status table: {error}")
+            return None
+
+    def check_state(self) -> None:
+        if not self._has_state_handler():
+            return
+        state = self._fetch_status_table()
+        if state is None:
+            return
+        if self._last_state_initialized:
+            if self._state_snapshot(state) != self._state_snapshot(self._last_state):
+                try:
+                    self._dispatch_state(state)
+                except Exception as e:
+                    if self.debug:
+                        print(f"❌ Error in state handler: {e}")
+        self._last_state = state
+        self._last_state_initialized = True
+
+    @staticmethod
+    def _extract_message_tags(msg):
+        tags = msg.get("tags")
+        if tags:
+            return tags
+        return (msg.get("context") or {}).get("tags") or []
+
+    def _route_matches(self, route, msg):
+        if route["msg_type"] is not None and msg.get("msg_type") != route["msg_type"]:
+            return False
+        msg_tags = self._extract_message_tags(msg)
+        if route["tag"] is not None and route["tag"] not in msg_tags:
+            return False
+        if route["tags"] and not any(t in msg_tags for t in route["tags"]):
+            return False
+        if route["tags_all"] and not all(t in msg_tags for t in route["tags_all"]):
+            return False
+        return True
+
+    def _dispatch_message(self, msg):
+        for route in self._routes:
+            if self._route_matches(route, msg):
+                return route["fn"](msg)
+        if self._default_handler:
+            return self._default_handler(msg)
+        if self.callback:
+            return self.callback(msg)
+
     def check_msg(self) -> None:
         """Check for messages from the server.
 
@@ -246,21 +357,19 @@ class Client:
                         return
                     
                     # If no callback is set, log a warning in debug mode
-                    if not self.callback:
+                    if not self._has_message_handlers():
                         if self.debug:
-                            print(f"⚠️ Received {len(messages)} message(s) but no callback is set")
+                            print(f"⚠️ Received {len(messages)} message(s) but no handler is set")
                         return
-                    
-                    # Process messages through callback
-                    # The API returns CheckMessage format: {msg_type, data, tags, source, timestamp}
+
                     for message in messages:
                         if not isinstance(message, dict):
                             if self.debug:
                                 print(f"⚠️ Skipping invalid message format: {type(message)}")
                             continue
-                        
+
                         try:
-                            self.callback(message)
+                            self._dispatch_message(message)
                         except Exception as e:
                             if self.debug:
                                 print(f"❌ Error in callback processing message: {e}")
@@ -414,6 +523,126 @@ class Client:
             if self.debug:
                 print(f"Agent Socket Error: {e}")
 
+    def send_file(self, path=None, *, data=None, filename=None, dest="", tags=None, meta=None, timeout=30):
+        """Upload a file and route it by ``dest`` or ``tags``.
+
+        The file is scanned by Surface (one scan credit) before it becomes
+        downloadable; the call returns synchronously with the terminal result.
+        Requires HTTP mode. Pass exactly one of ``dest`` / ``tags``:
+
+        * ``dest`` may be a bare entity name or a full
+          ``"account:region:entity:name"`` resource path. A same-account entity is
+          a direct transfer; an entity-group ``dest`` broadcasts to its members; a
+          different-account ``dest`` is a cross-account transfer (the recipient must
+          have opted in and allowlisted this account).
+        * ``tags`` hands the file to matching Strand automations.
+
+        Args:
+            path: Path to a file on disk (mutually exclusive with ``data``).
+            data: Raw bytes to upload (use with ``filename``).
+            filename: File name to use when ``data`` is given.
+            dest: Recipient entity, entity-group, or cross-account resource path.
+            tags: List of routing tags (alternative to ``dest``).
+            timeout: Request timeout in seconds.
+
+        Returns:
+            dict on success (``transfer_id``, ``status``, ``mode``, ...). ``None`` on
+            failure — e.g. 402 (credits exhausted), 403 (recipient not accepting),
+            415 (type), 422 (blocked).
+        """
+        if self.mode == "agent":
+            raise RuntimeError("file transfer requires HTTP mode (not the local agent)")
+        if path is not None:
+            with open(path, "rb") as fh:
+                content = fh.read()
+            name = filename or os.path.basename(path)
+        elif data is not None:
+            content = data
+            name = filename or "file.bin"
+        else:
+            raise ValueError("send_file requires either path or data")
+
+        files = {"file": (name, content)}
+        form = {}
+        if dest:
+            form["dest"] = dest
+        if tags:
+            form["tags"] = ",".join(tags)
+        if meta:
+            form["meta"] = json.dumps(meta)
+        try:
+            response = self.client.post("/entities/files", files=files, data=form, timeout=timeout)
+            if response.status_code in (200, 201):
+                return response.json()
+            if self.debug:
+                print(f"send_file failed ({response.status_code}): {response.text}")
+            return None
+        except httpx.HTTPError as error:
+            if self.debug:
+                print(f"send_file error: {error}")
+            return None
+
+    def check_files(self, limit=50, timeout=10):
+        """List clean files available to this entity (the receiver inbox).
+
+        Returns a list of file metadata dicts (only files that passed scanning
+        and are addressed to this entity).
+        """
+        if self.mode == "agent":
+            raise RuntimeError("file transfer requires HTTP mode (not the local agent)")
+        try:
+            response = self.client.get("/entities/files", params={"limit": limit}, timeout=timeout)
+            if response.status_code == 200:
+                return response.json().get("files", [])
+            return []
+        except httpx.HTTPError as error:
+            if self.debug:
+                print(f"check_files error: {error}")
+            return []
+
+    def download_file(self, transfer_id, timeout=30):
+        """Download a clean file's bytes by ``transfer_id``.
+
+        For ``delete_on_download`` files (the default), a successful download
+        consumes the file server-side. Returns the bytes, or ``None`` on failure.
+        """
+        if self.mode == "agent":
+            raise RuntimeError("file transfer requires HTTP mode (not the local agent)")
+        try:
+            response = self.client.get(f"/entities/files/download/{transfer_id}", timeout=timeout)
+            if response.status_code == 200:
+                return response.content
+            if self.debug:
+                print(f"download_file failed ({response.status_code}): {response.text}")
+            return None
+        except httpx.HTTPError as error:
+            if self.debug:
+                print(f"download_file error: {error}")
+            return None
+
+    def rescan_file(self, transfer_id, timeout=30):
+        """Re-scan a received cross-account file with this account's own profile.
+
+        Only the recipient of a cross-account file may call this; the scan is billed
+        to this (the recipient's) Surface credits. Returns a dict with
+        ``recipient_threat_level`` and ``blocked`` (True if the recipient's stricter
+        profile flagged the file, making it no longer downloadable on this side), or
+        ``None`` on failure (e.g. 402 credits exhausted).
+        """
+        if self.mode == "agent":
+            raise RuntimeError("file transfer requires HTTP mode (not the local agent)")
+        try:
+            response = self.client.post(f"/entities/files/{transfer_id}/rescan", timeout=timeout)
+            if response.status_code == 200:
+                return response.json()
+            if self.debug:
+                print(f"rescan_file failed ({response.status_code}): {response.text}")
+            return None
+        except httpx.HTTPError as error:
+            if self.debug:
+                print(f"rescan_file error: {error}")
+            return None
+
     def _publish_messages(self, messages: List[Union[dict, Message]]) -> None:
         """Publish a batch of messages to the server.
 
@@ -551,12 +780,15 @@ class Client:
                                             print(f"Failed to store message offline: {e}")
 
                     # Perform callback and message rate checks
-                    if self.callback and self.check_msg_rate:
+                    if self._has_inbound_handlers() and self.check_msg_rate:
                         current_time = time.time() * 1000
                         if current_time >= (
                             self._last_msg_check + (self.check_msg_rate * 1000)
                         ):
-                            self.check_msg()
+                            if self._has_message_handlers():
+                                self.check_msg()
+                            if self._has_state_handler():
+                                self.check_state()
                             self._last_msg_check = current_time
                     
                     # Send heartbeat if enabled and interval has passed

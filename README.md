@@ -236,24 +236,44 @@ get_data()  # Sends immediately, no queuing
 | `check_msg_rate` | `float` | `3.0` | Message check frequency in seconds (server callbacks) |
 | `callback` | `Callable` | `None` | Optional callback function for server messages |
 
-### Message Callbacks
+### Inbound Message Routing
+
+Route incoming messages with `@client.on()` — pair with `@client.tether()` for bidirectional messaging:
 
 ```python
-# Set up callback to handle incoming messages
-def message_handler(message):
-    # Process incoming message
-    print(f"Received: {message['msg_type']} from {message['source']}")
-    return True  # Return False if processing fails
+client = Client(api_key="your_key")
 
-client.set_message_callback(message_handler)
+@client.on(tag="ai-response")
+def handle_ai_reply(message):
+    print(message.get("data"))
 
-# Configure checking behavior (optional)
-client.set_message_check_rate(5.0)  # Check every 5 seconds (default: 3.0)
-client.set_message_check_limit(10)  # Max messages per check (default: 1)
+@client.on(tags=["alert", "anomaly"])
+def handle_alert(message):
+    print(message.get("data"))
 
-# Manual message check (works in any mode)
-messages = client.check_messages()
+@client.on_default
+def unhandled(message):
+    print("No route:", message.get("tags"))
+
+client.start()
 ```
+
+Pass `callback=` to the constructor as a catch-all fallback for unmatched messages.
+
+Configure polling with constructor args `check_msg_rate` (default `3.0`) and `check_msg_limit` (default `1`).
+
+### Inbound state (`@client.on_state()`)
+
+Poll `GET /entities/status-table` at the same interval as messages. The handler fires when the table changes (not on the first poll):
+
+```python
+@client.on_state()
+def handle_state(state):
+    if state.get("status") == "needs_maintenance":
+        print("Maintenance required")
+```
+
+Pass `state_callback=` as a catch-all fallback.
 
 ### IncomingMessage Structure
 
