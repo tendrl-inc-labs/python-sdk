@@ -59,6 +59,16 @@ class Client:
         "send_heartbeat",
         "heartbeat_interval",
         "_last_heartbeat",
+        # Message routing (@on / on_default) — added with the routing feature;
+        # every attribute assigned in __init__ MUST be listed here or Client()
+        # raises AttributeError at construction (__slots__ class).
+        "_routes",
+        "_default_handler",
+        # State handling (@on_state / state_callback + change tracking)
+        "_state_handler",
+        "state_callback",
+        "_last_state",
+        "_last_state_initialized",
     )
 
     def __init__(
@@ -82,12 +92,16 @@ class Client:
         headless: bool = False,
         send_heartbeat: bool = True,
         heartbeat_interval: int = 30,
+        app_url: str = None,
     ):
         """Initialize Tendrl client with optional offline storage and dynamic batching.
 
         Args:
             mode: Operating mode ('api' or 'agent') (default: 'api')
             api_key: API key for authentication (or use TENDRL_KEY env var)
+            app_url: Server origin, e.g. "https://app.tendrl.com" (default) or a
+                self-hosted/local instance like "http://192.168.1.50". Falls back
+                to the TENDRL_APP_URL env var. The SDK appends /api itself.
             check_msg_rate: Message check frequency in seconds (default: every 3 seconds)
             check_msg_limit: Maximum number of messages to retrieve (default: 1)
             debug: Enable debug logging (default: False)
@@ -150,14 +164,21 @@ class Client:
                     print("Agent mode: Using AF_UNIX on Windows (requires Windows 10 1803+)")
                 else:
                     print("Agent mode: Using AF_UNIX socket")
+            self._connect_to_agent()
         elif self.mode == "api":
             api_key = api_key or os.getenv("TENDRL_KEY")
             if not api_key:
                 raise APIException("No api_key provided and TENDRL_KEY env var not set")
             
+            # Server URL: explicit app_url arg > TENDRL_APP_URL env > production.
+            # Accepts either a bare origin ("http://192.168.1.50", device-SDK
+            # style) or a full base URL ending in /api (nano-agent style).
+            origin = (app_url or os.getenv("TENDRL_APP_URL") or "https://app.tendrl.com").rstrip("/")
+            if not origin.endswith("/api"):
+                origin += "/api"
             self.client = httpx.Client(
                 http2=True,
-                base_url="https://app.tendrl.com/api",
+                base_url=origin,
                 headers={
                     "Authorization": f"Bearer {api_key}",
                     "User-Agent": f"tendrl-python-sdk/{VERSION}"
@@ -198,7 +219,12 @@ class Client:
                 raise ConnectionError(f"Failed to connect to Tendrl agent: {e}")
 
     def _get_socket_path(self):
-        """Get platform-appropriate socket path."""
+        """Get the agent socket path: TENDRL_SOCKET env override (matches the
+        nano-agent's -socket flag — the system defaults need root to create),
+        else the platform-appropriate system path."""
+        override = os.getenv("TENDRL_SOCKET")
+        if override:
+            return override
         if self._is_windows:
             # Windows: Standard ProgramData location
             return "C:\\ProgramData\\tendrl\\tendrl_agent.sock"
@@ -218,11 +244,18 @@ class Client:
             return fn
         return decorator
 
-    def on_default(self, fn):
+    def on_default(self, fn=None):
+        # Dual-form decorator: works as @client.on_default and @client.on_default()
+        # (docs and muscle memory use both; single-form raised TypeError).
+        if fn is None:
+            return self.on_default
         self._default_handler = fn
         return fn
 
-    def on_state(self, fn):
+    def on_state(self, fn=None):
+        # Dual-form decorator: works as @client.on_state and @client.on_state().
+        if fn is None:
+            return self.on_state
         self._state_handler = fn
         return fn
 
@@ -448,10 +481,20 @@ class Client:
         """Start the message sender thread."""
         if not self.headless and self.sender_thread:
             self.sender_thread.start()
-        
+
         # Update entity status to online
         if self.mode == "api":
             self._update_entity_status(online=True)
+
+        # Drain anything buffered from a previous run. The 30s connectivity
+        # recheck only flushes on a False->True *transition*, which never fires
+        # on a fresh start — so without this, messages stored during an outage
+        # before a reboot would sit in SQLite forever.
+        if self.storage and self.storage.get_message_count() > 0:
+            if self.check_connection_state():
+                if self.debug:
+                    print("Startup: draining buffered offline messages")
+                self.process_offline_messages()
 
     def stop(self):
         """Stop the client and cleanup resources."""
@@ -499,6 +542,10 @@ class Client:
                         raise ConnectionError(
                             "Failed to connect to Tendrl Server"
                         ) from e
+                    # Any other socket error means the message was dropped —
+                    # always say so, silent drops are undebuggable.
+                    print(f"⚠️ Tendrl agent socket send failed, message dropped: {e}")
+                    return None
 
                 if original_timeout:
                     self.sock.settimeout(original_timeout)
@@ -657,13 +704,22 @@ class Client:
         batch_messages = []
         
         for message in messages:
+            # None is the sender-thread stop sentinel (queue.put(None) in stop());
+            # it can ride along in a drained batch — skip it, never send it.
+            if message is None:
+                continue
             # Convert Message to dict for checking
             msg_dict = message.model_dump() if isinstance(message, Message) else message
-            if msg_dict.get("context", {}).get("wait"):
+            # context may be present-but-None (no tags/entity), which .get's
+            # default does not cover — `or {}` handles both absent and None.
+            if (msg_dict.get("context") or {}).get("wait"):
                 individual_messages.append(message)
             else:
                 batch_messages.append(message)
         
+        # Track delivery so the caller can persist a batch that didn't make it.
+        ok = True
+
         # Send batch messages using the batch endpoint
         if batch_messages:
             try:
@@ -684,20 +740,54 @@ class Client:
                         json=batch_dicts,  # Send array directly
                         timeout=30,  # Longer timeout for batch requests
                     )
-                    if self.debug and response.status_code != 200:
-                        print(f"Batch request failed with status {response.status_code}")
+                    if response.status_code != 200:
+                        ok = False
+                        if self.debug:
+                            print(f"Batch request failed with status {response.status_code}")
                     # API returns {"code": 200, "content": messageIDs}
                     # Response is handled silently for batch operations
             except Exception as e:
+                ok = False
                 if self.debug:
-                    print(f"Batch request failed: {e}, falling back to individual requests")
-                # Fallback to individual requests
-                for message in batch_messages:
-                    self._publish_message(message)
-        
+                    print(f"Batch request failed: {e}")
+                # NOTE: no per-message HTTP fallback here — during an outage it
+                # just fails N more times and wastes the retry budget. Returning
+                # False lets _run_sender persist the whole batch to offline
+                # storage in one place instead.
+
         # Send individual messages that require wait_response
         for message in individual_messages:
-            self._publish_message(message)
+            result = self._publish_message(message)
+            # _publish_message returns an Exception (or None) on failure.
+            if isinstance(result, Exception) or result is None:
+                ok = False
+
+        return ok
+
+    def _store_batch_offline(self, batch):
+        """Persist a batch to offline storage (best-effort, per message) so a
+        failed send isn't lost. Used both when already-known-offline and when a
+        send fails inside a not-yet-detected outage."""
+        if not self.storage:
+            return
+        for message in batch:
+            if message is None:
+                continue
+            try:
+                msg_id = f"offline_{int(time.time() * 1000)}_{id(message)}"
+                msg_dict = message.model_dump() if isinstance(message, Message) else message
+                context = msg_dict.get('context') or {}
+                self.storage.store(
+                    msg_id,
+                    msg_dict.get('data', {}),
+                    tags=context.get('tags'),
+                    ttl=3600,
+                )
+                if self.debug:
+                    print(f"Stored message offline: {msg_id}")
+            except Exception as e:
+                if self.debug:
+                    print(f"Failed to store message offline: {e}")
 
     def _run_sender(self) -> None:
         """Process messages from queue in dynamic batches."""
@@ -755,29 +845,20 @@ class Client:
                                 f"Memory: {metrics.memory_usage:.1f}%, Batch size: {len(batch)}"
                             )
 
-                        # Only send if we have connection
+                        # Try to send when we believe we're connected. The
+                        # connectivity flag lags (rechecked every 30s), so a send
+                        # can still fail inside a fresh outage — persist on ACTUAL
+                        # failure, not only when the flag has already flipped, or
+                        # a network blip drops up to 30s of data despite
+                        # offline_storage being on.
                         if self._connection_state:
-                            self._publish_messages(batch)
+                            if not self._publish_messages(batch):
+                                self._store_batch_offline(batch)
+                                # Reflect reality so the next loop treats us as
+                                # offline and the recheck→restore path runs.
+                                self._connection_state = False
                         else:
-                            # Store messages offline if storage is enabled
-                            if self.storage:
-                                for message in batch:
-                                    try:
-                                        msg_id = f"offline_{int(time.time() * 1000)}_{id(message)}"
-                                        # Convert Message to dict if needed
-                                        msg_dict = message.model_dump() if isinstance(message, Message) else message
-                                        context = msg_dict.get('context', {})
-                                        self.storage.store(
-                                            msg_id,
-                                            msg_dict.get('data', {}),
-                                            tags=context.get('tags') if context else None,
-                                            ttl=3600
-                                        )
-                                        if self.debug:
-                                            print(f"Stored message offline: {msg_id}")
-                                    except Exception as e:
-                                        if self.debug:
-                                            print(f"Failed to store message offline: {e}")
+                            self._store_batch_offline(batch)
 
                     # Perform callback and message rate checks
                     if self._has_inbound_handlers() and self.check_msg_rate:

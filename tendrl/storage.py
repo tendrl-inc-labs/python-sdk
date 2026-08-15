@@ -38,9 +38,17 @@ class SQLiteStorage:
             """)
 
     def _get_conn(self):
-        """Get or create SQLite connection."""
+        """Get or create the SQLite connection.
+
+        The connection is created once (usually on the main thread) but every
+        real operation runs on the background sender thread, so it MUST be
+        opened with check_same_thread=False or SQLite raises
+        "objects created in a thread can only be used in that same thread" and
+        offline storage silently never persists anything. All access is
+        serialized through self._lock, so cross-thread use is safe here.
+        """
         if self._conn is None:
-            self._conn = sqlite3.connect(self.db_path)
+            self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
             self._conn.row_factory = sqlite3.Row
         return self._conn
 
