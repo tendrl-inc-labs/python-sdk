@@ -17,7 +17,7 @@ setup(
     url="https://github.com/tendrl-inc-labs/python-sdk",
     project_urls={
         "Bug Tracker": "https://github.com/tendrl-inc-labs/python-sdk/issues",
-        "Documentation": "https://tendrl.com/docs/python_sdk/",
+        "Documentation": "https://tendrl.com/docs/contact/sdks/python/getting-started/",
         "Source Code": "https://github.com/tendrl-inc-labs/python-sdk",
         "License": "https://github.com/tendrl-inc-labs/python-sdk/blob/main/LICENSE",
     },
