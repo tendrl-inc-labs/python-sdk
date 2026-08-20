@@ -1,0 +1,77 @@
+name: Release
+
+# Publishing to PyPI happens here and nowhere else. A publish from a laptop
+# picks up whatever is in the working tree, which is how a package ends up on
+# the index containing a change nobody reviewed — so this is tag-driven and runs
+# from a clean checkout.
+#
+# To cut a release:
+#   1. bump version in setup.py and merge it
+#   2. git tag v0.1.8 && git push --tags
+#
+# Authentication is PyPI Trusted Publishing (OIDC) — no API token to store or
+# rotate, matching how the AWS deploys already authenticate. One-time setup on
+# PyPI: project "tendrl" → Settings → Publishing → Add a trusted publisher, with
+# owner "tendrl-inc-labs", repository "python-sdk", workflow "release.yml", and
+# environment "pypi". Until that exists the publish step fails with an OIDC
+# error, not a credentials error.
+on:
+  push:
+    tags: ["v*"]
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false   # never cancel a publish mid-flight
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write   # required for Trusted Publishing
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build tooling
+        run: python -m pip install --quiet --upgrade build twine
+
+      # Gate: never publish a broken build. The package was once shipped with a
+      # __slots__ bug that made the client impossible to construct, and nothing
+      # caught it because there were no tests and no CI.
+      - name: Test
+        run: |
+          python -m pip install --quiet -e ".[test]" || python -m pip install --quiet -e .
+          python -m pip install --quiet pytest
+          pytest -q
+
+      # The tag and setup.py must agree. Without this, tagging v0.2.0 while
+      # setup.py still says 0.1.7 publishes 0.1.7 — silently, with a success
+      # tick — and the tag points at a version never released under that name.
+      # This is exactly how the published 0.1.6 and the local 0.1.7 drifted.
+      - name: Tag must match package version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(python -c "import re,pathlib;print(re.search(r'version\s*=\s*[\"\x27]([^\"\x27]+)', pathlib.Path('setup.py').read_text()).group(1))")"
+          if [ "$tag" != "$pkg" ]; then
+            echo "::error::tag $GITHUB_REF_NAME implies version $tag, setup.py says $pkg"
+            exit 1
+          fi
+          echo "publishing tendrl==$pkg"
+
+      - name: Build
+        run: python -m build
+
+      # Catches the failures that otherwise surface only after upload: a README
+      # that PyPI will not render, or missing metadata.
+      - name: Check the artifacts
+        run: twine check dist/*
+
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@release/v1
