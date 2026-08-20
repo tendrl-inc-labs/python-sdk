@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import List, Optional, Union
 
-from pydantic import BaseModel, Field, field_serializer, field_validator
+from pydantic import BaseModel, Field, field_serializer, field_validator, ConfigDict
 
 
 class Context(BaseModel):
@@ -107,6 +107,5 @@ class Message(BaseModel):
         # Remove None values to match current behavior
         return {k: v for k, v in data.items() if v is not None}
 
-    class Config:
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
