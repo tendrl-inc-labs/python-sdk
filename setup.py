@@ -32,7 +32,6 @@ setup(
         "Topic :: Internet",
         "License :: Other/Proprietary License",
         "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.8",
         "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
@@ -42,7 +41,10 @@ setup(
         "Operating System :: POSIX :: Linux",
         "Operating System :: MacOS",
     ],
-    python_requires=">=3.8",
+    # 3.9 is the real floor: client.py imports zoneinfo, which is 3.9+. Declaring
+    # 3.8 let `pip install tendrl` succeed and then fail on the first import —
+    # the quick-start's very first line. 3.8 has been EOL since 2024-10.
+    python_requires=">=3.9",
     install_requires=requirements,
     extras_require={
         "dev": [

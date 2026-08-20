@@ -1,3 +1,4 @@
+import logging
 import json
 import os
 import platform
@@ -17,6 +18,14 @@ from tendrl.models import Message, HeartbeatMessage, HeartbeatData
 from .storage import SQLiteStorage
 
 VERSION = "0.1.7"
+
+
+# Delivery problems are reported through the standard logging module, not the
+# `debug` flag. `debug` is opt-in chatter for development; a send that fails is
+# something the operator of a running program needs to hear about by default,
+# and with offline_storage off (the default) it means data was dropped.
+logger = logging.getLogger("tendrl")
+
 
 class APIException(Exception):
     """Exception raised for API-related errors."""
@@ -764,12 +773,18 @@ class Client:
 
         return ok
 
-    def _store_batch_offline(self, batch):
+    def _store_batch_offline(self, batch) -> int:
         """Persist a batch to offline storage (best-effort, per message) so a
         failed send isn't lost. Used both when already-known-offline and when a
-        send fails inside a not-yet-detected outage."""
+        send fails inside a not-yet-detected outage.
+
+        Returns the number of messages actually persisted, so the caller can
+        tell "held for retry" apart from "dropped" — with offline_storage off
+        (the default) this stores nothing, and the caller must say so.
+        """
         if not self.storage:
-            return
+            return 0
+        stored = 0
         for message in batch:
             if message is None:
                 continue
@@ -783,11 +798,34 @@ class Client:
                     tags=context.get('tags'),
                     ttl=3600,
                 )
+                stored += 1
                 if self.debug:
                     print(f"Stored message offline: {msg_id}")
             except Exception as e:
                 if self.debug:
                     print(f"Failed to store message offline: {e}")
+        return stored
+
+    def _report_undelivered(self, batch, stored: int, reason: str) -> None:
+        """Say out loud what happened to messages that did not reach Contact.
+
+        This used to be silent: with offline_storage off (the default) a failed
+        batch was discarded and nothing was logged unless debug=True, so a client
+        with a bad key or no network looked identical to a healthy one.
+        """
+        lost = len(batch) - stored
+        if stored:
+            logger.warning(
+                "tendrl: %s — %d message(s) held in offline storage for retry", reason, stored
+            )
+        if lost > 0:
+            logger.warning(
+                "tendrl: %s — %d message(s) DROPPED and cannot be recovered%s",
+                reason,
+                lost,
+                "" if self.storage else
+                ". Offline storage is off; pass offline_storage=True to persist through outages",
+            )
 
     def _run_sender(self) -> None:
         """Process messages from queue in dynamic batches."""
@@ -853,12 +891,16 @@ class Client:
                         # offline_storage being on.
                         if self._connection_state:
                             if not self._publish_messages(batch):
-                                self._store_batch_offline(batch)
+                                self._report_undelivered(
+                                    batch, self._store_batch_offline(batch), "send failed"
+                                )
                                 # Reflect reality so the next loop treats us as
                                 # offline and the recheck→restore path runs.
                                 self._connection_state = False
                         else:
-                            self._store_batch_offline(batch)
+                            self._report_undelivered(
+                                batch, self._store_batch_offline(batch), "client is offline"
+                            )
 
                     # Perform callback and message rate checks
                     if self._has_inbound_handlers() and self.check_msg_rate:
