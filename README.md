@@ -147,7 +147,11 @@ components
 ## Installation
 
 ```bash
-pip install tendrl
+# with uv (recommended)
+uv add git+https://github.com/tendrl-inc-labs/python-sdk
+
+# or with pip
+pip install git+https://github.com/tendrl-inc-labs/python-sdk
 ```
 
 ## Basic Usage
