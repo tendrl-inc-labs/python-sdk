@@ -14,12 +14,12 @@ setup(
     description="A Python SDK for the Tendrl data collection platform with cross-platform UNIX socket support, offline storage, and dynamic batching. Licensed for use with Tendrl services only.",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/tendrl-inc-labs/python-sdk",
+    url="https://github.com/tendrl-inc-labs/contact-python",
     project_urls={
-        "Bug Tracker": "https://github.com/tendrl-inc-labs/python-sdk/issues",
+        "Bug Tracker": "https://github.com/tendrl-inc-labs/contact-python/issues",
         "Documentation": "https://tendrl.com/docs/python_sdk/",
-        "Source Code": "https://github.com/tendrl-inc-labs/python-sdk",
-        "License": "https://github.com/tendrl-inc-labs/python-sdk/blob/main/LICENSE",
+        "Source Code": "https://github.com/tendrl-inc-labs/contact-python",
+        "License": "https://github.com/tendrl-inc-labs/contact-python/blob/main/LICENSE",
     },
     packages=find_packages(),
     classifiers=[
