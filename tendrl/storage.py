@@ -38,9 +38,20 @@ class SQLiteStorage:
             """)
 
     def _get_conn(self):
-        """Get or create SQLite connection."""
+        """Get or create SQLite connection.
+
+        check_same_thread=False is required, not merely convenient: the
+        connection is opened by whichever thread builds the Client, while every
+        write comes from the sender thread. Without it sqlite3 refused each
+        call, and because the caller only logged that under debug, offline
+        storage silently stored nothing at all.
+
+        It is safe here because every method below holds self._lock for the
+        whole of its database access, so no two threads are ever inside the
+        connection at once.
+        """
         if self._conn is None:
-            self._conn = sqlite3.connect(self.db_path)
+            self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
             self._conn.row_factory = sqlite3.Row
         return self._conn
 
@@ -134,6 +145,7 @@ class SQLiteStorage:
 
     def close(self):
         """Close database connection."""
-        if self._conn:
-            self._conn.close()
-            self._conn = None
+        with self._lock:
+            if self._conn:
+                self._conn.close()
+                self._conn = None

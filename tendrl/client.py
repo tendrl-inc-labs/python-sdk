@@ -1,5 +1,6 @@
 # import dbm
 import json
+import logging
 import os
 import platform
 from queue import Queue, Empty, Full as QueueFull
@@ -15,6 +16,16 @@ from tendrl.utils.utils import get_system_metrics, calculate_dynamic_batch_size
 from .storage import SQLiteStorage
 
 VERSION = "0.1.6"
+
+# Undelivered messages are announced through the standard logging module, so an
+# application can route them wherever its other logs go. With no logging set up
+# at all, Python's last-resort handler still puts warnings on stderr, which is
+# the point: a client that cannot deliver must not look like a healthy one.
+logger = logging.getLogger("tendrl")
+
+# A client that has lost its network would otherwise log on every batch. Report
+# at most this often, and count what happened in between.
+UNDELIVERED_REPORT_INTERVAL = 60  # seconds
 
 class APIException(Exception):
     """Exception raised for API-related errors."""
@@ -54,6 +65,10 @@ class Client:
         "_last_connection_check",
         "_is_windows",
         "headless",
+        "_server_label",
+        "_last_undelivered_report",
+        "_held_since_report",
+        "_dropped_since_report",
     )
 
     def __init__(
@@ -125,6 +140,7 @@ class Client:
         if self.mode == "agent":
             # Use AF_UNIX on all platforms
             self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            self._server_label = self._get_socket_path()
             if self.debug:
                 if self._is_windows:
                     print("Agent mode: Using AF_UNIX on Windows (requires Windows 10 1803+)")
@@ -144,6 +160,7 @@ class Client:
             if not origin.endswith("/api"):
                 origin += "/api"
 
+            self._server_label = origin
             self.client = httpx.Client(
                 http2=True,
                 base_url=origin,
@@ -164,6 +181,11 @@ class Client:
 
         self._connection_state = True  # Assume connected initially
         self._last_connection_check = time.time() * 1000
+
+        # Undelivered-message accounting, read by _report_undelivered.
+        self._last_undelivered_report = 0.0
+        self._held_since_report = 0
+        self._dropped_since_report = 0
 
     def _connect_to_agent(self):
         """Establish connection to the agent using AF_UNIX socket."""
@@ -322,6 +344,21 @@ class Client:
         Args:
             message: Message to publish
             timeout: Request timeout in seconds
+
+        Returns:
+            The server's reply, if it sent one.
+        """
+        result, _ = self._send_one(message, timeout=timeout)
+        return result
+
+    def _send_one(self, message, timeout: int = 5):
+        """Send one message and say whether it arrived.
+
+        Returns:
+            (result, delivered). `result` is what _publish_message hands back to
+            the caller; `delivered` is what the sender loop needs, because
+            publish() returns before the send happens and so cannot report a
+            failure itself.
         """
         try:
             if self.mode == "agent":
@@ -331,9 +368,9 @@ class Client:
                     self.sock.sendall(json.dumps(message).encode("utf-8"))
                     if message.get("context", {}).get("wait"):
                         msg_id = json.loads(self.sock.recv(1024).decode()).get("id")
-                        return msg_id
+                        return msg_id, True
                 except socket.timeout as err:
-                    return str(f"error: {err.errno}")
+                    return str(f"error: {err.errno}"), False
                 except socket.error as e:
                     if e.errno == 32:  # Broken pipe
                         raise ConnectionError(
@@ -343,6 +380,8 @@ class Client:
                 if original_timeout:
                     self.sock.settimeout(original_timeout)
 
+                return None, True
+
             else:  # HTTP Client Mode
                 response = self.client.post(
                     url="/entities/message",
@@ -350,22 +389,32 @@ class Client:
                     timeout=timeout,
                 )
 
-                if response.status_code == 200 and response.content:
-                    return response.json()
+                if response.status_code != 200:
+                    if self.debug:
+                        print(f"Request failed with status {response.status_code}")
+                    return None, False
+
+                return (response.json() if response.content else None), True
         except httpx.HTTPError as error:
-            return error
+            return error, False
         except socket.error as e:
             if self.debug:
                 print(f"Agent Socket Error: {e}")
+            return None, False
 
-    def _publish_messages(self, messages: List[dict]) -> None:
+    def _publish_messages(self, messages: List[dict]) -> List[dict]:
         """Publish a batch of messages to the server.
 
         Args:
             messages: List of messages to publish
+
+        Returns:
+            The messages that did not reach the server, for the caller to
+            persist or report. Delivery used to be assumed, which is how a
+            failed batch could disappear without a trace.
         """
         if not messages:
-            return
+            return []
             
         # Check if any messages require individual handling (wait_response=True)
         individual_messages = []
@@ -377,32 +426,106 @@ class Client:
             else:
                 batch_messages.append(message)
         
+        undelivered = []
+
         # Send batch messages using the batch endpoint
         if batch_messages:
-            try:
-                if self.mode == "agent":
-                    # For agent mode, send individual messages (no batch support in socket protocol)
-                    for message in batch_messages:
-                        self._publish_message(message)
-                else:
+            if self.mode == "agent":
+                # For agent mode, send individual messages (no batch support in socket protocol)
+                for message in batch_messages:
+                    if not self._send_one(message)[1]:
+                        undelivered.append(message)
+            else:
+                try:
                     # Use batch endpoint for HTTP API
                     response = self.client.post(
                         url="/entities/messages",  # Batch endpoint
                         json={"messages": batch_messages},
                         timeout=30,  # Longer timeout for batch requests
                     )
-                    if self.debug and response.status_code != 200:
-                        print(f"Batch request failed with status {response.status_code}")
-            except Exception as e:
-                if self.debug:
-                    print(f"Batch request failed: {e}, falling back to individual requests")
-                # Fallback to individual requests
-                for message in batch_messages:
-                    self._publish_message(message)
-        
+                    if response.status_code != 200:
+                        if self.debug:
+                            print(f"Batch request failed with status {response.status_code}")
+                        undelivered.extend(batch_messages)
+                except Exception as e:
+                    if self.debug:
+                        print(f"Batch request failed: {e}, falling back to individual requests")
+                    # Fallback to individual requests
+                    for message in batch_messages:
+                        if not self._send_one(message)[1]:
+                            undelivered.append(message)
+
         # Send individual messages that require wait_response
         for message in individual_messages:
-            self._publish_message(message)
+            if not self._send_one(message)[1]:
+                undelivered.append(message)
+
+        return undelivered
+
+    def _handle_undelivered(self, messages: List[dict]) -> None:
+        """Persist messages that did not reach the server, and report them.
+
+        Offline storage used to be reached only when the periodic probe had
+        already marked the connection down, so a send that failed on its own --
+        including every send in the first thirty seconds of a client's life --
+        bypassed it entirely.
+        """
+        held = 0
+        dropped = 0
+        for message in messages:
+            if self.storage:
+                try:
+                    msg_id = f"offline_{int(time.time() * 1000)}_{id(message)}"
+                    self.storage.store(
+                        msg_id,
+                        message.get('data', {}),
+                        tags=message.get('tags'),
+                        ttl=3600
+                    )
+                    if self.debug:
+                        print(f"Stored message offline: {msg_id}")
+                    held += 1
+                    continue
+                except Exception as e:
+                    if self.debug:
+                        print(f"Failed to store message offline: {e}")
+            dropped += 1
+
+        self._report_undelivered(held=held, dropped=dropped)
+
+    def _report_undelivered(self, held: int = 0, dropped: int = 0) -> None:
+        """Announce undelivered messages, at most once a minute.
+
+        publish() is asynchronous, so nothing the caller holds can report a
+        delivery failure. Without this, a wrong URL, a dead network or a
+        rejected key produced a client that looked entirely healthy while its
+        data went missing.
+        """
+        self._held_since_report += held
+        self._dropped_since_report += dropped
+
+        now = time.time()
+        if now - self._last_undelivered_report < UNDELIVERED_REPORT_INTERVAL:
+            return
+        self._last_undelivered_report = now
+
+        held, dropped = self._held_since_report, self._dropped_since_report
+        self._held_since_report = 0
+        self._dropped_since_report = 0
+
+        if dropped:
+            logger.warning(
+                "Tendrl: DROPPED %d message(s) that could not be delivered to %s. "
+                "Set offline_storage=True to hold undelivered messages for retry "
+                "instead of losing them.",
+                dropped, self._server_label,
+            )
+        if held:
+            logger.warning(
+                "Tendrl: could not deliver %d message(s) to %s; held in offline "
+                "storage and retried when the connection returns.",
+                held, self._server_label,
+            )
 
     def _run_sender(self) -> None:
         """Process messages from queue in dynamic batches."""
@@ -467,26 +590,14 @@ class Client:
                                 f"Memory: {metrics.memory_usage:.1f}%, Batch size: {len(batch)}"
                             )
 
-                        # Only send if we have connection
+                        # Only attempt a send if the last probe found a server.
                         if self._connection_state:
-                            self._publish_messages(batch)
+                            undelivered = self._publish_messages(batch)
                         else:
-                            # Store messages offline if storage is enabled
-                            if self.storage:
-                                for message in batch:
-                                    try:
-                                        msg_id = f"offline_{int(time.time() * 1000)}_{id(message)}"
-                                        self.storage.store(
-                                            msg_id,
-                                            message.get('data', {}),
-                                            tags=message.get('tags'),
-                                            ttl=3600
-                                        )
-                                        if self.debug:
-                                            print(f"Stored message offline: {msg_id}")
-                                    except Exception as e:
-                                        if self.debug:
-                                            print(f"Failed to store message offline: {e}")
+                            undelivered = batch
+
+                        if undelivered:
+                            self._handle_undelivered(undelivered)
 
                     # A shutdown sentinel means stop() is waiting on this
                     # thread: flush what was already collected, then leave
@@ -564,7 +675,8 @@ class Client:
 
             # Convert stored messages back to publishable format
             messages_to_send = []
-            message_ids_to_delete = []
+            send_ids = []          # storage ids, parallel to messages_to_send
+            corrupt_ids = []       # unparseable rows, dropped either way
 
             for stored_msg in stored_messages:
                 try:
@@ -575,31 +687,46 @@ class Client:
                     # Create message in the expected format
                     message = make_message(data, "publish", tags=tags)
                     messages_to_send.append(message)
-                    message_ids_to_delete.append(stored_msg['id'])
+                    send_ids.append(stored_msg['id'])
                 except Exception as e:
                     if self.debug:
                         print(f"Error processing stored message {stored_msg['id']}: {e}")
                     # Delete corrupted message
-                    message_ids_to_delete.append(stored_msg['id'])
+                    corrupt_ids.append(stored_msg['id'])
+
+            if corrupt_ids:
+                self.storage.delete_messages(corrupt_ids)
+                processed += len(corrupt_ids)
 
             # Send the batch
             if messages_to_send:
                 try:
-                    self._publish_messages(messages_to_send)
-                    # Only delete messages if they were sent successfully
-                    self.storage.delete_messages(message_ids_to_delete)
-                    processed += len(messages_to_send)
-                    if self.debug:
-                        print(f"Sent batch of {len(messages_to_send)} messages ({processed}/{total_count})")
+                    undelivered = self._publish_messages(messages_to_send)
                 except Exception as e:
                     if self.debug:
                         print(f"Failed to send offline message batch: {e}")
                     break  # Stop processing if sending fails
-            else:
-                # Delete any corrupted messages and continue
-                if message_ids_to_delete:
-                    self.storage.delete_messages(message_ids_to_delete)
-                    processed += len(message_ids_to_delete)
+
+                # Delete only what actually arrived. Deleting the whole batch
+                # regardless is how a flapping connection used to erase stored
+                # messages it had never managed to send.
+                still_queued = {id(m) for m in undelivered}
+                delivered_ids = [
+                    stored_id
+                    for message, stored_id in zip(messages_to_send, send_ids)
+                    if id(message) not in still_queued
+                ]
+                if delivered_ids:
+                    self.storage.delete_messages(delivered_ids)
+                    processed += len(delivered_ids)
+                    if self.debug:
+                        print(f"Sent batch of {len(delivered_ids)} messages ({processed}/{total_count})")
+
+                if undelivered:
+                    # They stay in storage, so this is a retry, not a loss.
+                    self._report_undelivered(held=len(undelivered))
+                    break
+            elif not corrupt_ids:
                 break
 
         if self.debug and processed > 0:
