@@ -12,7 +12,7 @@ This example demonstrates the fundamental features of the Tendrl Python SDK:
 import sys
 import time
 import signal
-from datetime import datetime, UTC
+from datetime import datetime, timezone
 from tendrl import Client
 
 def signal_handler(signum, frame):
@@ -32,12 +32,16 @@ client = Client(
     max_queue_size=1000
 )
 
-def callback(response):
-    """Optional callback to handle server responses"""
-    print(f"✓ Message sent successfully at {response.get('timestamp')}")
-    print(f"  Server response: {response.get('status', 'OK')}")
+def handle_incoming(message):
+    """Handler for messages sent TO this entity.
 
-client.callback = callback
+    This is not a send-confirmation hook: publish() is asynchronous and the
+    client never calls back to say a message went out. Setting a handler also
+    turns on polling for inbound messages.
+    """
+    print(f"inbound message: {message.get('data')}")
+
+client.callback = handle_incoming
 client.start()
 
 print("Starting Tendrl SDK Basic Usage Example...")
@@ -63,7 +67,7 @@ app_metrics = {
         "error_rate": 0.02,
         "active_connections": 1247
     },
-    "timestamp": datetime.now(UTC).isoformat(),
+    "timestamp": datetime.now(timezone.utc).isoformat(),
     "host": "web-01.example.com"
 }
 
@@ -102,7 +106,7 @@ def collect_system_info():
             "usage_percent": psutil.disk_usage('/').percent,
             "free_gb": round(psutil.disk_usage('/').free / (1024**3), 2)
         },
-        "collection_time": datetime.now(UTC).isoformat()
+        "collection_time": datetime.now(timezone.utc).isoformat()
     }
 
 # Collect and send system metrics
@@ -126,7 +130,7 @@ for i in range(5):
         },
         "battery_level": 85 - (i * 5),
         "signal_strength": -42 - (i * 3),
-        "timestamp": datetime.now(UTC).isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "device_type": "environmental_sensor",
         "firmware_version": "2.1.4"
     }

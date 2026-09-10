@@ -31,6 +31,9 @@ pip install gpiozero w1thermsensor  # Real hardware sensors
 # Set your Tendrl API key
 export TENDRL_KEY="your_api_key_here"
 
+# Optional: point at a local or staging stack instead of production
+export TENDRL_APP_URL="http://192.168.1.50:8000"
+```
 
 ### Running Examples
 
@@ -225,20 +228,18 @@ from tendrl import Client
 
 # Basic configuration
 client = Client(
-    mode="api",           # "api" or "agent"
     api_key="your_key",   # Or use TENDRL_KEY env var
-    debug=True,           # Enable debug logging
+    debug=True,           # Print verbose diagnostics to stdout
     max_batch_size=50,    # Messages per batch
     max_queue_size=1000   # Max queued messages
 )
 
-# Advanced configuration
+# Holding data through an outage, and handling inbound messages
 client = Client(
-    mode="agent",
-    socket_path="/tmp/tendrl.sock",  # Custom socket path
-    retry_attempts=3,                 # Connection retries
-    timeout_seconds=30,               # Request timeout
-    callback=my_callback_function     # Response handler
+    api_key="your_key",
+    offline_storage=True,             # Keep undelivered messages on disk
+    db_path="tendrl_offline.db",      # Where to keep them
+    callback=my_callback_function,    # Handler for inbound messages
 )
 ```
 
@@ -308,10 +309,7 @@ sudo usermod -a -G gpio $USER
 
 ## 📖 Additional Resources
 
-- [Tendrl Python SDK Documentation](https://tendrl.com/docs/python_sdk/)
-- [API Reference](https://tendrl.com/docs/api/)
-- [Best Practices Guide](https://tendrl.com/docs/best_practices/)
-- [Support Forum](https://community.tendrl.com/)
+- [Tendrl Python SDK documentation](https://tendrl.com/docs/contact/sdks/python/getting-started/)
 
 ## 🤝 Contributing
 
