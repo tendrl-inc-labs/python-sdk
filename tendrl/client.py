@@ -372,7 +372,15 @@ class Client:
                 try:
                     self.sock.sendall(json.dumps(message).encode("utf-8"))
                     if message.get("context", {}).get("wait"):
-                        msg_id = json.loads(self.sock.recv(1024).decode()).get("id")
+                        reply = self.sock.recv(1024).decode()
+                        try:
+                            msg_id = json.loads(reply).get("id")
+                        except ValueError:
+                            # An unparseable reply is a failed send, not a
+                            # reason to take the sender thread down with us.
+                            if self.debug:
+                                print(f"Agent returned a malformed reply: {reply!r}")
+                            return None, False
                         return msg_id, True
                 except socket.timeout as err:
                     return str(f"error: {err.errno}"), False
@@ -381,6 +389,11 @@ class Client:
                         raise ConnectionError(
                             "Failed to connect to Tendrl Server"
                         ) from e
+                    # Any other socket error means the message did not go out.
+                    # Falling through here reported it as delivered.
+                    if self.debug:
+                        print(f"Agent Socket Error: {e}")
+                    return None, False
 
                 if original_timeout:
                     self.sock.settimeout(original_timeout)
