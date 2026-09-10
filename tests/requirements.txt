@@ -1,0 +1,4 @@
+pytest>=7.0
+# The client is constructed with http2=True, so httpx needs its h2 extra.
+httpx[http2]>=0.28
+psutil>=5.9
