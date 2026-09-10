@@ -71,7 +71,14 @@ class Recorder:
             if isinstance(body, list):
                 out.extend(body)
             elif isinstance(body, dict):
-                out.append(body)
+                # The batch endpoint takes {"messages": [...]}; a single publish
+                # posts the message on its own. Accept both so these tests
+                # describe the wire format rather than one code path.
+                inner = body.get("messages")
+                if isinstance(inner, list):
+                    out.extend(inner)
+                else:
+                    out.append(body)
         return out
 
     def markers(self):

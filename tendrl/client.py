@@ -444,12 +444,19 @@ class Client:
                     )
                     batch_interval = max(self.min_batch_interval, batch_interval)
 
-                    # Collect up to batch_size messages from the queue
+                    # Collect up to batch_size messages from the queue.
+                    # stop() enqueues None as a shutdown sentinel; batching it
+                    # crashed this thread on message.get("context") and took the
+                    # rest of the batch down with it, so drop it here.
+                    stopping = False
                     while len(batch) < dynamic_batch_size and not self.queue.empty():
                         try:
                             msg = self.queue.get(timeout=batch_interval)
-                            batch.append(msg)
                             self.queue.task_done()
+                            if msg is None:
+                                stopping = True
+                                break
+                            batch.append(msg)
                         except Empty:
                             break
 
@@ -480,6 +487,12 @@ class Client:
                                     except Exception as e:
                                         if self.debug:
                                             print(f"Failed to store message offline: {e}")
+
+                    # A shutdown sentinel means stop() is waiting on this
+                    # thread: flush what was already collected, then leave
+                    # rather than idling out the remaining interval.
+                    if stopping:
+                        return
 
                     # Perform callback and message rate checks
                     if self.callback and self.check_msg_rate:
