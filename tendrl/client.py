@@ -346,9 +346,14 @@ class Client:
             timeout: Request timeout in seconds
 
         Returns:
-            The server's reply, if it sent one.
+            The server's reply, if it sent one. Note that a reply is not proof
+            of delivery: the server sends no body on some successful posts, so
+            a bare None cannot be told apart from a failure. That is why a
+            failure is reported here rather than left to the caller to infer.
         """
-        result, _ = self._send_one(message, timeout=timeout)
+        result, delivered = self._send_one(message, timeout=timeout)
+        if not delivered:
+            self._report_undelivered(dropped=1)
         return result
 
     def _send_one(self, message, timeout: int = 5):

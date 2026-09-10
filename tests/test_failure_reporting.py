@@ -94,3 +94,32 @@ def test_server_error_is_reported(client_factory, server, caplog):
     assert _wait_for_record(caplog, "DROPPED"), (
         "the server refused the batch and the client said nothing"
     )
+
+
+def test_headless_publish_reports_failure(client_factory, monkeypatch, caplog):
+    """Headless mode has no sender loop, so the send happens inline — and its
+    return value cannot express failure, because a successful post may also
+    return None."""
+    monkeypatch.setenv("TENDRL_APP_URL", DEAD_URL)
+    caplog.set_level(logging.WARNING, logger="tendrl")
+
+    c = client_factory(headless=True)
+    c.publish({"marker": "headless-lost"}, tags=["sensor"])
+
+    assert _wait_for_record(caplog, "DROPPED"), (
+        "a headless publish failed and the caller got no signal at all"
+    )
+
+
+def test_wait_response_publish_reports_failure(client_factory, server, caplog):
+    """wait_response bypasses the queue too. A server that rejects the message
+    still has to be visible."""
+    caplog.set_level(logging.WARNING, logger="tendrl")
+    server.post_status = 500
+
+    c = client_factory()
+    c.publish({"marker": "sync-rejected"}, tags=["sensor"], wait_response=True)
+
+    assert _wait_for_record(caplog, "DROPPED"), (
+        "the server rejected a synchronous publish and the client said nothing"
+    )
