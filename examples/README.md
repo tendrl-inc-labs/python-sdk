@@ -16,7 +16,7 @@ This directory contains practical examples demonstrating the Tendrl Python SDK w
 
 ```bash
 # Install the Tendrl SDK
-pip install tendrl
+pip install git+https://github.com/tendrl-inc-labs/contact-python
 
 # Install optional dependencies for advanced examples
 pip install psutil  # For system metrics in basic_usage.py

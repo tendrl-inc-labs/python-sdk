@@ -146,8 +146,18 @@ components
 
 ## Installation
 
+Install from this repository. That is the supported path, and it is what the
+[documentation](https://tendrl.com/docs/contact/sdks/python/getting-started/)
+tells you to do.
+
 ```bash
-pip install tendrl
+uv add git+https://github.com/tendrl-inc-labs/contact-python
+```
+
+Or with pip:
+
+```bash
+pip install git+https://github.com/tendrl-inc-labs/contact-python
 ```
 
 ## Basic Usage
