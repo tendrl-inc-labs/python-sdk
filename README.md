@@ -74,6 +74,20 @@ response = client.publish({"event": "deploy"}, tags=["ci"])
 
 There is no `start()` to call. `stop()` still closes the HTTP connection.
 
+## Agent mode
+
+With `mode="agent"` the client writes to a local [Tendrl Nano Agent](https://github.com/tendrl-inc-labs/nano-agent) over a Unix socket instead of talking to the server itself. The agent holds the API key and forwards for every application on the host.
+
+```python
+client = Client(mode="agent")
+client.start()
+client.publish({"temperature": 23.5}, tags=["sensor"])
+```
+
+`start()` connects to the socket, at `/var/lib/tendrl/tendrl_agent.sock` on Unix and `C:\ProgramData\tendrl\tendrl_agent.sock` on Windows. If no agent is listening it raises `ConnectionError` rather than failing quietly on every later send. The path is not configurable.
+
+Agent mode sends one message per write; there is no batch endpoint in the socket protocol.
+
 ## Knowing when delivery fails
 
 When a message cannot be delivered, the client logs a warning through the standard `logging` module under the logger name `tendrl`:
@@ -143,7 +157,7 @@ The callback receives the decoded message dictionary as the server sent it. An e
 | `max_batch_interval` | `float` | `1.0` | Longest wait between batches, in seconds |
 | `target_cpu_percent` | `float` | `65.0` | CPU level the batch sizer aims to stay under |
 | `target_mem_percent` | `float` | `75.0` | Memory level the batch sizer aims to stay under |
-| `mode` | `str` | `"api"` | Transport. Only `"api"` is supported in this release |
+| `mode` | `str` | `"api"` | `"api"` talks HTTP to the server; `"agent"` talks to a local Tendrl Nano Agent over a Unix socket |
 
 Batch size is recalculated on every pass from current CPU, memory and queue depth, between `min_batch_size` and `max_batch_size`.
 

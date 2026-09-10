@@ -343,7 +343,14 @@ class Client:
         return wrapper
 
     def start(self):
-        """Start the message sender thread."""
+        """Connect to the agent if in agent mode, then start the sender thread.
+
+        The connect call used to be missing entirely: _connect_to_agent was
+        defined and invoked from nowhere, so the socket was never connected and
+        every agent-mode send failed silently against an unconnected socket.
+        """
+        if self.mode == "agent":
+            self._connect_to_agent()
         if not self.headless and self.sender_thread:
             self.sender_thread.start()
 
