@@ -27,6 +27,15 @@ logger = logging.getLogger("tendrl")
 # at most this often, and count what happened in between.
 UNDELIVERED_REPORT_INTERVAL = 60  # seconds
 
+# How long publish() will wait for room in a full queue before giving the
+# message to the undelivered path. An unbounded wait -- the previous behavior --
+# froze the caller's loop with no error and no way to notice.
+QUEUE_PUT_TIMEOUT = 1.0  # seconds
+
+# How long stop() waits for the sender to finish its current batch. Bounded so
+# a wedged send cannot hang the caller's shutdown indefinitely.
+SHUTDOWN_JOIN_TIMEOUT = 10.0  # seconds
+
 class APIException(Exception):
     """Exception raised for API-related errors."""
 
@@ -242,15 +251,18 @@ class Client:
                         # I think could make a decorator to wrap this as like a middleware, if it is a server event, have server cb like in MP
                         messages = response.json().get("messages")
                         if messages:
-                            if self.check_msg_limit == 1:
-                                self.callback(messages[0])
-                            else:
-                                for message in messages:
-                                    try:
-                                        self.callback(message)
-                                    except Exception as e:
-                                        if self.debug:
-                                            print(f"error in callback: {e}")
+                            # A callback that raises used to propagate out of
+                            # the sender thread and kill it permanently on the
+                            # single-message path. One bad inbound message must
+                            # not stop the client from ever sending again.
+                            for message in messages[:1] if self.check_msg_limit == 1 else messages:
+                                try:
+                                    self.callback(message)
+                                except Exception as e:
+                                    logger.warning(
+                                        "Tendrl: message callback raised %s: %s",
+                                        type(e).__name__, e,
+                                    )
                 except httpx.HTTPError as error:
                     if self.debug:
                         print(f"httpx error: {error}")
@@ -279,7 +291,13 @@ class Client:
         if wait_response or self.headless:
             return self._publish_message(message, timeout=timeout)
 
-        self.queue.put(message)
+        try:
+            self.queue.put(message, timeout=QUEUE_PUT_TIMEOUT)
+        except QueueFull:
+            # The sender cannot drain as fast as the caller is publishing,
+            # usually because the network is down. Persist or report rather
+            # than blocking a sensor loop indefinitely.
+            self._handle_undelivered([message])
         return ""
 
     def tether(
@@ -305,8 +323,9 @@ class Client:
                     message = make_message(data, "publish", tags=tags)
                     self._publish_message(message)
                 else:
+                    message = make_message(data, "publish", tags=tags)
                     try:
-                        self.queue.put(make_message(data, "publish", tags=tags))
+                        self.queue.put(message, timeout=QUEUE_PUT_TIMEOUT)
                     except QueueFull:
                         if write_offline and self.storage:
                             if self.debug:
@@ -314,6 +333,9 @@ class Client:
                             self.storage.store(
                                 str(time.time()), data, tags=tags, ttl=db_ttl
                             )
+                            self._report_undelivered(held=1)
+                        else:
+                            self._handle_undelivered([message])
                 return data
 
             return wrapped_function
@@ -327,10 +349,23 @@ class Client:
 
     def stop(self):
         """Stop the client and cleanup resources."""
-        if not self.headless and self.sender_thread:
+        if not self.headless and self.sender_thread and self.sender_thread.is_alive():
             self._stop_event.set()
-            self.queue.put(None)  # Send stop signal to sender thread
-            self.sender_thread.join()
+            try:
+                # A nudge so the sender wakes immediately rather than idling
+                # out its interval. The loop also watches _stop_event, so an
+                # unbounded put() here bought nothing and hung shutdown
+                # whenever the queue happened to be full.
+                self.queue.put(None, timeout=QUEUE_PUT_TIMEOUT)
+            except QueueFull:
+                pass
+            self.sender_thread.join(timeout=SHUTDOWN_JOIN_TIMEOUT)
+            if self.sender_thread.is_alive():
+                logger.warning(
+                    "Tendrl: the sender thread did not stop within %ss; "
+                    "up to one batch may not have been sent.",
+                    SHUTDOWN_JOIN_TIMEOUT,
+                )
         if self.mode == "agent":
             self.sock.close()
         else:

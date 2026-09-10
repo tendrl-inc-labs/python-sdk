@@ -30,9 +30,8 @@ setup(
         "Topic :: System :: Logging",
         "Topic :: System :: Networking :: Monitoring",
         "Topic :: Internet",
-        "License :: Other/Proprietary License",
+        "License :: Other/Proprietary License",  # MIT + Commons Clause; no exact PyPI classifier exists
         "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.8",
         "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
@@ -42,7 +41,7 @@ setup(
         "Operating System :: POSIX :: Linux",
         "Operating System :: MacOS",
     ],
-    python_requires=">=3.8",
+    python_requires=">=3.9",
     install_requires=requirements,
     extras_require={
         "dev": [
