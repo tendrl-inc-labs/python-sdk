@@ -60,6 +60,7 @@ class Client:
         self,
         mode: str = "api",
         api_key: str = None,
+        app_url: str = None,
         check_msg_rate: float = 3,
         check_msg_limit: int = 1,
         debug: bool = False,
@@ -134,9 +135,18 @@ class Client:
             if not api_key:
                 raise APIException("No api_key provided and TENDRL_KEY env var not set")
             
+            # Server URL: explicit app_url arg > TENDRL_APP_URL env > production.
+            # Accepts either a bare origin ("http://192.168.1.50") or a full base
+            # URL already ending in /api, so the same value works everywhere.
+            # Without this the SDK could only ever reach production, which made it
+            # impossible to test against staging or a local stack.
+            origin = (app_url or os.getenv("TENDRL_APP_URL") or "https://app.tendrl.com").rstrip("/")
+            if not origin.endswith("/api"):
+                origin += "/api"
+
             self.client = httpx.Client(
                 http2=True,
-                base_url="https://app.tendrl.com/api",
+                base_url=origin,
                 headers={
                     "Authorization": f"Bearer {api_key}",
                     "User-Agent": f"tendrl-python-sdk/{VERSION}"
