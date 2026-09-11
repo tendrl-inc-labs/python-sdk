@@ -66,3 +66,24 @@ def test_bearer_token_is_sent(client_factory, server):
     auth = [h.get("Authorization") for _, _, h in server.requests if h.get("Authorization")]
     assert auth, "no Authorization header was ever sent"
     assert auth[0] == "Bearer sekrit-key"
+
+
+def test_the_batch_body_is_a_bare_array(client_factory, server):
+    """The shape the server actually binds.
+
+    Contact's WriteMessages does `var messages []models.Message` then Bind, so
+    the batch endpoint takes a bare JSON array. This client used to post
+    {"messages": [...]}, which fails to unmarshal into that type, so every
+    batched publish was rejected. Nothing caught it because the test recorder
+    unwrapped the envelope, making the harness more permissive than the server.
+    """
+    c = client_factory()
+    for i in range(3):
+        c.publish({"marker": f"shape-{i}"}, tags=["sensor"])
+    assert server.wait_for_marker("shape-2")
+
+    bad = server.bad_batch_bodies()
+    assert not bad, (
+        "the batch endpoint was posted a body the real server rejects: "
+        f"{bad!r}. It binds []models.Message, so it must be a bare array."
+    )

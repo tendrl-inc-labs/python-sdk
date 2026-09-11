@@ -500,7 +500,10 @@ class Client:
                     # Use batch endpoint for HTTP API
                     response = self.client.post(
                         url="/entities/messages",  # Batch endpoint
-                        json={"messages": batch_messages},
+                        # A bare array, not {"messages": [...]}. The handler
+                        # binds []models.Message, so the envelope was rejected
+                        # outright and every batched publish was lost.
+                        json=batch_messages,
                         timeout=30,  # Longer timeout for batch requests
                     )
                     if response.status_code != 200:
@@ -660,10 +663,11 @@ class Client:
                             self._handle_undelivered(undelivered)
 
                     # A shutdown sentinel means stop() is waiting on this
-                    # thread: flush what was already collected, then leave
-                    # rather than idling out the remaining interval.
+                    # thread: leave the loop rather than idling out the
+                    # remaining interval. Break, not return, so the final flush
+                    # after the loop still runs.
                     if stopping:
-                        return
+                        break
 
                     # Perform callback and message rate checks
                     if self.callback and self.check_msg_rate:
@@ -687,6 +691,38 @@ class Client:
                         if self.debug and deleted_count > 0:
                             print(f"Cleaned up {deleted_count} expired offline messages")
                     self._last_cleanup = current_time
+
+        self._flush_remaining()
+
+    def _flush_remaining(self) -> None:
+        """Send whatever is still queued once the loop has stopped.
+
+        stop() sets _stop_event and only then enqueues its sentinel, so the loop
+        condition can be false before the sentinel is ever collected. A message
+        published moments before stop() would then sit on the queue forever, and
+        publish() had already returned, so the caller had no way to know. The
+        loss was total and silent whenever the sender happened to be idle.
+        """
+        batch = []
+        while True:
+            try:
+                message = self.queue.get_nowait()
+            except Empty:
+                break
+            self.queue.task_done()
+            if message is None:      # the shutdown sentinel
+                continue
+            batch.append(message)
+
+        if not batch:
+            return
+
+        if self._connection_state:
+            undelivered = self._publish_messages(batch)
+        else:
+            undelivered = batch
+        if undelivered:
+            self._handle_undelivered(undelivered)
 
     def check_connection_state(self) -> bool:
         """Check if the client can connect to the server.

@@ -59,6 +59,21 @@ class Recorder:
         with self._lock:
             self.requests.append((path, body, headers))
 
+    def bad_batch_bodies(self):
+        """Batch posts whose shape the real server would reject.
+
+        Contact's WriteMessages does `var messages []models.Message` followed by
+        Bind, so the batch endpoint takes a bare JSON array. Anything else is a
+        400 and the messages are gone.
+        """
+        bad = []
+        with self._lock:
+            reqs = list(self.requests)
+        for path, body, _ in reqs:
+            if path.rstrip("/").endswith("/messages") and not isinstance(body, list):
+                bad.append((path, body))
+        return bad
+
     # -- assertions the tests actually care about ---------------------------
     def messages(self):
         """Every message body posted to a message route, flattened."""
@@ -69,16 +84,17 @@ class Recorder:
             if "message" not in path:
                 continue
             if isinstance(body, list):
+                # The batch endpoint. Contact binds []models.Message, so a bare
+                # array is the only shape it accepts.
                 out.extend(body)
             elif isinstance(body, dict):
-                # The batch endpoint takes {"messages": [...]}; a single publish
-                # posts the message on its own. Accept both so these tests
-                # describe the wire format rather than one code path.
-                inner = body.get("messages")
-                if isinstance(inner, list):
-                    out.extend(inner)
-                else:
-                    out.append(body)
+                # A single publish posts one message on its own object.
+                # Deliberately NOT unwrapping {"messages": [...]} here: this
+                # recorder previously accepted that envelope, which is how the
+                # client shipped a batch body the real server rejects while the
+                # suite stayed green. The harness must not be more permissive
+                # than the server.
+                out.append(body)
         return out
 
     def markers(self):
